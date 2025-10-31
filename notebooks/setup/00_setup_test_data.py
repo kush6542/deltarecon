@@ -486,8 +486,19 @@ source_data = [
 ]
 
 source_df = spark.createDataFrame(source_data, source_schema_partitioned)
-orc_path = f"{orc_base_path}/{table_name}/{batch_id}/data.orc"
-source_df.write.mode("overwrite").format("orc").save(orc_path)
+
+# CRITICAL: Write ORC files with Hive-style partitioning
+# This creates files like: .../date_partition=2024-01-01/part-00000.orc
+orc_path_base = f"{orc_base_path}/{table_name}/{batch_id}"
+source_df.write.mode("overwrite").format("orc").partitionBy("date_partition").save(orc_path_base)
+
+print(f"✅ Created partitioned ORC files at: {orc_path_base}")
+
+# List the created partition files for verification
+partition_files = dbutils.fs.ls(orc_path_base.replace("dbfs:", "/dbfs"))
+print(f"   Created {len(partition_files)} partition folders:")
+for pf in partition_files:
+    print(f"     - {pf.name}")
 
 target_df = source_df.withColumn("_aud_batch_load_id", lit(batch_id))
 
@@ -1256,30 +1267,74 @@ for i, batch_id in enumerate(["TEST_20250101_130000", "TEST_20250101_140000", "T
 
 # Other group2 tables
 other_tables = [
-    ("group2_composite_pk", "TEST_20250101_160000"),
-    ("group2_composite_pk_fail", "TEST_20250101_160001"),
-    ("group2_partitioned", "TEST_20250101_170000"),
-    ("group2_no_pk", "TEST_20250101_180000")
+    ("group2_composite_pk", "TEST_20250101_160000", False),
+    ("group2_composite_pk_fail", "TEST_20250101_160001", False),
+    ("group2_partitioned", "TEST_20250101_170000", True),  # This is partitioned!
+    ("group2_no_pk", "TEST_20250101_180000", False)
 ]
-for i, (table, batch_id) in enumerate(other_tables):
+for i, (table, batch_id, is_partitioned) in enumerate(other_tables):
     full_table_name = f"ts42_demo.taxi_example.{table}"
-    orc_file_path = f"dbfs:{orc_base_path}/{table}/{batch_id}/data.orc"
     
-    try:
-        file_size = dbutils.fs.ls(orc_file_path.replace("dbfs:", "/dbfs"))[0].size if len(dbutils.fs.ls(orc_file_path.replace("dbfs:", "/dbfs"))) > 0 else 1000
-    except:
-        file_size = 1000
-    
-    metadata_data.append((
-        full_table_name,
-        batch_id,
-        orc_file_path,
-        base_time + timedelta(hours=4+i),
-        file_size,
-        "N",
-        base_time + timedelta(hours=4+i),
-        base_time + timedelta(hours=4+i)
-    ))
+    if is_partitioned:
+        # For partitioned table, list all partition folders and their ORC files
+        batch_base_path = f"{orc_base_path}/{table}/{batch_id}"
+        try:
+            # List partition folders (e.g., date_partition=2024-01-01/)
+            partition_folders = dbutils.fs.ls(batch_base_path.replace("dbfs:", "/dbfs"))
+            
+            for partition_folder in partition_folders:
+                if partition_folder.isDir():
+                    # List ORC files within each partition
+                    partition_files = dbutils.fs.ls(partition_folder.path.replace("dbfs:", "/dbfs"))
+                    
+                    for orc_file in partition_files:
+                        if orc_file.name.endswith(".orc"):
+                            orc_file_path = f"dbfs:{orc_file.path.replace('/dbfs/', '/')}"
+                            
+                            metadata_data.append((
+                                full_table_name,
+                                batch_id,
+                                orc_file_path,
+                                base_time + timedelta(hours=4+i),
+                                orc_file.size,
+                                "N",
+                                base_time + timedelta(hours=4+i),
+                                base_time + timedelta(hours=4+i)
+                            ))
+                            print(f"   Added metadata for: {orc_file_path}")
+        except Exception as e:
+            print(f"⚠️ Warning: Could not list partitioned files for {table}: {e}")
+            # Fallback to generic path
+            orc_file_path = f"dbfs:{batch_base_path}/data.orc"
+            metadata_data.append((
+                full_table_name,
+                batch_id,
+                orc_file_path,
+                base_time + timedelta(hours=4+i),
+                1000,
+                "N",
+                base_time + timedelta(hours=4+i),
+                base_time + timedelta(hours=4+i)
+            ))
+    else:
+        # Non-partitioned tables - single ORC file
+        orc_file_path = f"dbfs:{orc_base_path}/{table}/{batch_id}/data.orc"
+        
+        try:
+            file_size = dbutils.fs.ls(orc_file_path.replace("dbfs:", "/dbfs"))[0].size if len(dbutils.fs.ls(orc_file_path.replace("dbfs:", "/dbfs"))) > 0 else 1000
+        except:
+            file_size = 1000
+        
+        metadata_data.append((
+            full_table_name,
+            batch_id,
+            orc_file_path,
+            base_time + timedelta(hours=4+i),
+            file_size,
+            "N",
+            base_time + timedelta(hours=4+i),
+            base_time + timedelta(hours=4+i)
+        ))
 
 metadata_schema = StructType([
     StructField("table_name", StringType(), False),

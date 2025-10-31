@@ -124,7 +124,12 @@ class MetadataWriter:
         self.logger.info(f"Updating log entry (complete)")
         
         try:
-            exception_value = f"'{log_record.exception}'" if log_record.exception else "NULL"
+            # Escape single quotes in exception message for SQL (replace ' with '')
+            if log_record.exception:
+                escaped_exception = log_record.exception.replace("'", "''")
+                exception_value = f"'{escaped_exception}'"
+            else:
+                exception_value = "NULL"
             
             update_query = f"""
                 UPDATE {constants.VALIDATION_LOG_TABLE}

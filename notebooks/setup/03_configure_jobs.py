@@ -93,42 +93,59 @@ Set schedule to None for manual trigger only.
 """
 
 TABLE_GROUP_CONFIGS = {
-    "demo_dmv": {
-        "cluster_profile": "small",
-        "schedule": None,  # Daily at 2 AM
-        "iteration_suffix": "daily",
-        "timeout_seconds": 3600,
-        "max_retries": 2
-    },
+    # "demo_dmv": {
+    #     "cluster_profile": "small",
+    #     "schedule": None,  # Daily at 2 AM
+    #     "iteration_suffix": "daily",
+    #     "timeout_seconds": 3600,
+    #     "max_retries": 2
+    # },
     
-    "hive_full_test": {
-        "cluster_profile": "small",
-        "schedule": None,  # Daily at 4 AM
-        "iteration_suffix": "daily",
-        "timeout_seconds": 7200,
-        "max_retries": 2
-    },
+    # "hive_full_test": {
+    #     "cluster_profile": "small",
+    #     "schedule": None,  # Daily at 4 AM
+    #     "iteration_suffix": "daily",
+    #     "timeout_seconds": 7200,
+    #     "max_retries": 2
+    # },
     
-    "incremental_test_abhishek": {
+    # "incremental_test_abhishek": {
+    #     "cluster_profile": "small",
+    #     "schedule": None,  # Every 6 hours
+    #     "iteration_suffix": "6hourly",
+    #     "timeout_seconds": 3600,
+    #     "max_retries": 1
+    # },
+    
+    # "incremntal_test_group": {
+    #     "cluster_profile": "small",
+    #     "schedule": None,  # Daily at 3 AM
+    #     "iteration_suffix": "daily",
+    #     "timeout_seconds": 3600,
+    #     "max_retries": 2
+    # },
+    
+    # "test_file_options": {
+    #     "cluster_profile": "small",
+    #     "schedule": None,  # Daily at 1 AM
+    #     "iteration_suffix": "daily",
+    #     "timeout_seconds": 1800,
+    #     "max_retries": 1
+    # },
+    
+    # Test groups for framework validation
+    "group1_basic": {
         "cluster_profile": "small",
-        "schedule": None,  # Every 6 hours
-        "iteration_suffix": "6hourly",
-        "timeout_seconds": 3600,
+        "schedule": None,  # Manual trigger only for testing
+        "iteration_suffix": "test",
+        "timeout_seconds": 1800,
         "max_retries": 1
     },
     
-    "incremntal_test_group": {
+    "group2_advanced": {
         "cluster_profile": "small",
-        "schedule": None,  # Daily at 3 AM
-        "iteration_suffix": "daily",
-        "timeout_seconds": 3600,
-        "max_retries": 2
-    },
-    
-    "test_file_options": {
-        "cluster_profile": "small",
-        "schedule": None,  # Daily at 1 AM
-        "iteration_suffix": "daily",
+        "schedule": None,  # Manual trigger only for testing
+        "iteration_suffix": "test",
         "timeout_seconds": 1800,
         "max_retries": 1
     },

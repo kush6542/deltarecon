@@ -123,7 +123,7 @@ class MetadataWriter:
             exception_value = f"'{log_record.exception}'" if log_record.exception else "NULL"
             
             update_query = f"""
-                UPDATE {VALIDATION_LOG_TABLE}
+                UPDATE {constants.VALIDATION_LOG_TABLE}
                 SET validation_run_status = '{log_record.status}',
                     validation_run_end_time = current_timestamp(),
                     exception = {exception_value}

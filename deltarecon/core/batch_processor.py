@@ -49,7 +49,8 @@ class BatchProcessor:
         Raises:
             BatchProcessingError: If batch query fails
         """
-        self.logger.info(f"Identifying unprocessed batches for: {config.table_name}")
+        self.logger.set_table_context(config.table_name)
+        self.logger.info(f"Identifying unprocessed batches")
         self.logger.info(f"  Write mode: {config.write_mode}")
         
         try:
@@ -104,6 +105,7 @@ class BatchProcessor:
             
             if not rows:
                 self.logger.info("No unprocessed batches found")
+                self.logger.clear_table_context()
                 return [], []
             
             # Extract batch IDs and ORC paths
@@ -116,9 +118,11 @@ class BatchProcessor:
             # Verify batch-to-path mapping
             self._verify_batch_mapping(config.table_name, batch_ids, orc_paths)
             
+            self.logger.clear_table_context()
             return batch_ids, orc_paths
             
         except Exception as e:
+            self.logger.clear_table_context()
             error_msg = f"Failed to get unprocessed batches for {config.table_name}: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             raise BatchProcessingError(error_msg)

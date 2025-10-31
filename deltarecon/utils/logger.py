@@ -5,10 +5,12 @@ Provides:
 - Consistent log formatting
 - Validation-specific logging methods
 - Section headers for readability
+- Table context support for parallel processing
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+from contextlib import contextmanager
 
 
 class ValidationLogger:
@@ -17,6 +19,7 @@ class ValidationLogger:
     def __init__(self, name: str):
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.INFO)
+        self._table_context: Optional[str] = None
         
         # Clear existing handlers to avoid duplicates
         self.logger.handlers = []
@@ -31,21 +34,45 @@ class ValidationLogger:
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
     
+    def set_table_context(self, table_name: str):
+        """Set table context for subsequent log messages"""
+        self._table_context = table_name
+    
+    def clear_table_context(self):
+        """Clear table context"""
+        self._table_context = None
+    
+    @contextmanager
+    def table_context(self, table_name: str):
+        """Context manager for table-specific logging"""
+        old_context = self._table_context
+        self._table_context = table_name
+        try:
+            yield
+        finally:
+            self._table_context = old_context
+    
+    def _format_message(self, message: str) -> str:
+        """Format message with table context if available"""
+        if self._table_context:
+            return f"[Table: {self._table_context}] {message}"
+        return message
+    
     def info(self, message: str):
         """Log info level message"""
-        self.logger.info(message)
+        self.logger.info(self._format_message(message))
     
     def warning(self, message: str):
         """Log warning level message"""
-        self.logger.warning(message)
+        self.logger.warning(self._format_message(message))
     
     def error(self, message: str, exc_info: bool = False):
         """Log error level message"""
-        self.logger.error(message, exc_info=exc_info)
+        self.logger.error(self._format_message(message), exc_info=exc_info)
     
     def debug(self, message: str):
         """Log debug level message"""
-        self.logger.debug(message)
+        self.logger.debug(self._format_message(message))
     
     def log_section(self, title: str, width: int = 80):
         """Log a major section header"""

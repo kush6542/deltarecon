@@ -47,7 +47,8 @@ class MetadataWriter:
         Raises:
             MetadataWriteError: If write fails
         """
-        self.logger.info(f"Writing log entry (start) for: {log_record.tgt_table}")
+        self.logger.set_table_context(log_record.tgt_table)
+        self.logger.info(f"Writing log entry (start)")
         
         try:
             # Check if entry already exists
@@ -101,10 +102,12 @@ class MetadataWriter:
                 self.spark.sql(insert_query)
             
             self.logger.info("Log entry written (idempotent)")
+            self.logger.clear_table_context()
             
         except Exception as e:
             error_msg = f"Failed to write log start for {log_record.tgt_table}: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
+            self.logger.clear_table_context()
             raise MetadataWriteError(error_msg)
     
     def write_log_complete(self, log_record: ValidationLogRecord):
@@ -117,7 +120,8 @@ class MetadataWriter:
         Raises:
             MetadataWriteError: If update fails
         """
-        self.logger.info(f"Updating log entry (complete) for: {log_record.tgt_table}")
+        self.logger.set_table_context(log_record.tgt_table)
+        self.logger.info(f"Updating log entry (complete)")
         
         try:
             exception_value = f"'{log_record.exception}'" if log_record.exception else "NULL"
@@ -134,10 +138,12 @@ class MetadataWriter:
             
             self.spark.sql(update_query)
             self.logger.info(f"Log entry updated: status={log_record.status}")
+            self.logger.clear_table_context()
             
         except Exception as e:
             error_msg = f"Failed to update log for {log_record.tgt_table}: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
+            self.logger.clear_table_context()
             raise MetadataWriteError(error_msg)
     
     def write_summary(self, summary_record: ValidationSummaryRecord):
@@ -150,7 +156,8 @@ class MetadataWriter:
         Raises:
             MetadataWriteError: If write fails
         """
-        self.logger.info(f"Writing summary for: {summary_record.tgt_table}")
+        self.logger.set_table_context(summary_record.tgt_table)
+        self.logger.info(f"Writing summary")
         
         try:
             batch_ids_array = "array(" + ",".join([f"'{bid}'" for bid in summary_record.batch_load_ids]) + ")"
@@ -188,9 +195,11 @@ class MetadataWriter:
             
             self.spark.sql(insert_query)
             self.logger.info("Summary written")
+            self.logger.clear_table_context()
             
         except Exception as e:
             error_msg = f"Failed to write summary for {summary_record.tgt_table}: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
+            self.logger.clear_table_context()
             raise MetadataWriteError(error_msg)
 

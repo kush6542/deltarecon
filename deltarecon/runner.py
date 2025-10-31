@@ -219,12 +219,17 @@ class ValidationRunner:
             loader = SourceTargetLoader(self.spark)
             validation_engine = ValidationEngine()
             
+            # Set table context for all operations
+            self.logger.set_table_context(table_name)
+            
             # Step 1: Identify unprocessed batches
             self.logger.info("Step 1: Identifying unprocessed batches...")
             batch_ids, orc_paths = batch_processor.get_unprocessed_batches(table_config)
             
             if not batch_ids:
-                return self._handle_no_batches(table_config, metadata_writer)
+                result = self._handle_no_batches(table_config, metadata_writer)
+                self.logger.clear_table_context()
+                return result
             
             # Step 2: Write log entry (IN_PROGRESS)
             self.logger.info("Step 2: Writing log entry...")
@@ -259,7 +264,8 @@ class ValidationRunner:
             log_record.end_time = datetime.now()
             metadata_writer.write_log_complete(log_record)
             
-            self.logger.info(f"Table completed: {table_name} - {validation_result.overall_status}")
+            self.logger.info(f"Table completed - Status: {validation_result.overall_status}")
+            self.logger.clear_table_context()
             
             return {
                 "table": table_name,
@@ -268,6 +274,7 @@ class ValidationRunner:
             }
             
         except Exception as e:
+            self.logger.clear_table_context()
             return self._handle_table_error(table_config, e, metadata_writer)
     
     def _handle_no_batches(
@@ -276,6 +283,7 @@ class ValidationRunner:
         metadata_writer: MetadataWriter
     ) -> Dict[str, Any]:
         """Handle case when there are no new batches to validate."""
+        self.logger.set_table_context(table_config.table_name)
         self.logger.info("No new batches to validate - writing log entry")
         
         # Write log entry for "no new batches"
@@ -290,6 +298,7 @@ class ValidationRunner:
         metadata_writer.write_log_start(log_record)
         metadata_writer.write_log_complete(log_record)
         
+        self.logger.clear_table_context()
         return {
             "table": table_config.table_name,
             "status": "NO_NEW_BATCHES",
@@ -305,7 +314,8 @@ class ValidationRunner:
         """Handle errors during table validation."""
         table_name = table_config.table_name
         
-        self.logger.error(f"Table FAILED: {table_name} - {str(error)}")
+        self.logger.set_table_context(table_name)
+        self.logger.error(f"Table FAILED - Error: {str(error)}")
         self.logger.error(str(error), exc_info=True)
         
         # Write error to log (metadata_writer is guaranteed to be initialized)
@@ -318,6 +328,7 @@ class ValidationRunner:
             self.logger.error("Failed to write error to log")
             self.logger.error(str(log_error), exc_info=True)
         
+        self.logger.clear_table_context()
         return {
             "table": table_name,
             "status": "FAILED",

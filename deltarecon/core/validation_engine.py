@@ -61,8 +61,8 @@ class ValidationEngine:
         """
         start_time = datetime.now()
         
+        self.logger.set_table_context(config.table_name)
         self.logger.log_section(f"VALIDATION RUN: {config.table_name}")
-        self.logger.info(f"Table: {config.table_name}")
         self.logger.info(f"Batches: {batch_ids}")
         self.logger.info(f"Iteration: {iteration_name}")
         
@@ -83,8 +83,14 @@ class ValidationEngine:
         # Run all validators
         validator_results = {}
         
+        # Import validator logger to set table context
+        from deltarecon.validators.base_validator import logger as validator_logger
+        
         for validator in self.validators:
             try:
+                # Set table context for validator logger
+                validator_logger.set_table_context(config.table_name)
+                
                 validator_start = time.time()
                 result = validator.validate(source_df, target_df, config)
                 validator_duration = time.time() - validator_start
@@ -102,6 +108,9 @@ class ValidationEngine:
                     metrics={},
                     message=str(e)
                 )
+            finally:
+                # Clear table context after each validator
+                validator_logger.clear_table_context()
         
         # Unpersist DataFrames
         source_df.unpersist()
@@ -125,6 +134,7 @@ class ValidationEngine:
         
         duration = validation_result.duration_seconds
         self.logger.log_section(f"VALIDATION COMPLETE: {overall_status} ({duration:.2f}s)")
+        self.logger.clear_table_context()
         
         return validation_result
     

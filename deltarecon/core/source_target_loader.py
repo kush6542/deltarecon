@@ -59,7 +59,8 @@ class SourceTargetLoader:
             DataLoadError: If data loading fails
             DataConsistencyError: If verification fails
         """
-        self.logger.info(f"Loading data for {config.table_name}")
+        self.logger.set_table_context(config.table_name)
+        self.logger.info(f"Loading data")
         self.logger.info(f"  Batches: {batch_ids}")
         self.logger.info(f"  ORC files: {len(orc_paths)}")
         
@@ -72,6 +73,7 @@ class SourceTargetLoader:
         # Verify batch IDs match
         self._verify_batch_consistency(source_df, target_df, batch_ids, config.table_name)
         
+        self.logger.clear_table_context()
         return source_df, target_df
     
     def _load_source_orc(self, orc_paths: List[str], config: TableConfig) -> DataFrame:
@@ -147,8 +149,10 @@ class SourceTargetLoader:
                 return df_original
                 
         except DataConsistencyError:
+            self.logger.clear_table_context()
             raise
         except Exception as e:
+            self.logger.clear_table_context()
             error_msg = f"Failed to load source ORC files: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             raise DataLoadError(error_msg)
@@ -206,7 +210,7 @@ class SourceTargetLoader:
         Raises:
             DataLoadError: If Delta loading fails
         """
-        self.logger.info(f"Loading target Delta table: {table_name}")
+        self.logger.info(f"Loading target Delta table")
         
         try:
             # Read Delta table
@@ -224,6 +228,7 @@ class SourceTargetLoader:
             return df_filtered
             
         except Exception as e:
+            self.logger.clear_table_context()
             error_msg = f"Failed to load target Delta table {table_name}: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             raise DataLoadError(error_msg)

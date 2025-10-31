@@ -9,17 +9,18 @@ Provides:
 """
 
 import logging
+import threading
 from typing import Any, Dict, Optional
 from contextlib import contextmanager
 
 
 class ValidationLogger:
-    """Structured logger with validation-specific methods"""
+    """Structured logger with validation-specific methods (thread-safe)"""
     
     def __init__(self, name: str):
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.INFO)
-        self._table_context: Optional[str] = None
+        self._thread_local = threading.local()
         
         # Clear existing handlers to avoid duplicates
         self.logger.handlers = []
@@ -35,27 +36,28 @@ class ValidationLogger:
         self.logger.addHandler(handler)
     
     def set_table_context(self, table_name: str):
-        """Set table context for subsequent log messages"""
-        self._table_context = table_name
+        """Set table context for subsequent log messages (thread-safe)"""
+        self._thread_local.table_context = table_name
     
     def clear_table_context(self):
-        """Clear table context"""
-        self._table_context = None
+        """Clear table context (thread-safe)"""
+        self._thread_local.table_context = None
     
     @contextmanager
     def table_context(self, table_name: str):
-        """Context manager for table-specific logging"""
-        old_context = self._table_context
-        self._table_context = table_name
+        """Context manager for table-specific logging (thread-safe)"""
+        old_context = getattr(self._thread_local, 'table_context', None)
+        self._thread_local.table_context = table_name
         try:
             yield
         finally:
-            self._table_context = old_context
+            self._thread_local.table_context = old_context
     
     def _format_message(self, message: str) -> str:
-        """Format message with table context if available"""
-        if self._table_context:
-            return f"[Table: {self._table_context}] {message}"
+        """Format message with table context if available (thread-safe)"""
+        table_context = getattr(self._thread_local, 'table_context', None)
+        if table_context:
+            return f"[Table: {table_context}] {message}"
         return message
     
     def info(self, message: str):

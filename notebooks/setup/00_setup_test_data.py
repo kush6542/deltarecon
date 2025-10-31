@@ -3,9 +3,9 @@
 Setup Test Data for DeltaRecon Validation Framework
 
 This notebook creates:
-1. Source ORC files in DBFS
+1. Source ORC files in DBFS (new location: dbfs:/FileStore/deltarecon_test_data/)
 2. Target Delta tables with test data
-3. Ingestion metadata tables (config, audit, metadata, partition mapping)
+3. Ingestion metadata tables (config, audit, metadata, partition mapping) - uses INSERT
 4. Two table groups:
    - group1_basic: Basic validation checks (row count, schema, PK)
    - group2_advanced: Advanced checks (write mode, multiple PKs, partitions)
@@ -22,6 +22,7 @@ from pyspark.sql.types import StructType, StructField, StringType, IntegerType, 
 from pyspark.sql.functions import col, lit, current_timestamp, when
 from datetime import datetime, timedelta
 import random
+import hashlib
 
 print(f"Framework Version: {constants.FRAMEWORK_VERSION}")
 print(f"Ingestion Catalog: {constants.INGESTION_OPS_CATALOG}")
@@ -40,85 +41,6 @@ print(f"Catalog and schema ready: {constants.INGESTION_OPS_SCHEMA}")
 
 # COMMAND ----------
 
-# DBTITLE 1,Setup: Create Ingestion Metadata Tables (if not exist)
-# Create ingestion_config table
-ingestion_config_ddl = f"""
-CREATE TABLE IF NOT EXISTS {constants.INGESTION_CONFIG_TABLE} (
-  group_name STRING,
-  target_catalog STRING,
-  target_schema STRING,
-  target_table STRING,
-  source_schema STRING,
-  source_table STRING,
-  write_mode STRING,
-  primary_key STRING,
-  partition_column STRING,
-  is_active STRING
-)
-USING DELTA
-COMMENT 'Ingestion configuration table'
-"""
-
-spark.sql(ingestion_config_ddl)
-print(f"Created/verified: {constants.INGESTION_CONFIG_TABLE}")
-
-# COMMAND ----------
-
-# Create ingestion_audit table
-ingestion_audit_ddl = f"""
-CREATE TABLE IF NOT EXISTS {constants.INGESTION_AUDIT_TABLE} (
-  batch_load_id STRING,
-  target_table_name STRING,
-  status STRING,
-  group_name STRING,
-  load_start_time TIMESTAMP,
-  load_end_time TIMESTAMP
-)
-USING DELTA
-COMMENT 'Ingestion audit table'
-"""
-
-spark.sql(ingestion_audit_ddl)
-print(f"Created/verified: {constants.INGESTION_AUDIT_TABLE}")
-
-# COMMAND ----------
-
-# Create ingestion_metadata table
-ingestion_metadata_ddl = f"""
-CREATE TABLE IF NOT EXISTS {constants.INGESTION_METADATA_TABLE} (
-  table_name STRING,
-  batch_load_id STRING,
-  source_file_path STRING,
-  file_size BIGINT,
-  record_count BIGINT
-)
-USING DELTA
-COMMENT 'Ingestion metadata table'
-"""
-
-spark.sql(ingestion_metadata_ddl)
-print(f"Created/verified: {constants.INGESTION_METADATA_TABLE}")
-
-# COMMAND ----------
-
-# Create source_table_partition_mapping table
-partition_mapping_ddl = f"""
-CREATE TABLE IF NOT EXISTS {constants.INGESTION_SRC_TABLE_PARTITION_MAPPING} (
-  schema_name STRING,
-  table_name STRING,
-  partition_column_name STRING,
-  datatype STRING,
-  index INT
-)
-USING DELTA
-COMMENT 'Source table partition mapping'
-"""
-
-spark.sql(partition_mapping_ddl)
-print(f"Created/verified: {constants.INGESTION_SRC_TABLE_PARTITION_MAPPING}")
-
-# COMMAND ----------
-
 # DBTITLE 1,Setup: Create Target Catalog and Schema
 target_catalog = "ts42_demo"
 target_schema = "taxi_example"
@@ -132,15 +54,21 @@ print(f"Target catalog/schema ready: {target_catalog}.{target_schema}")
 
 # COMMAND ----------
 
-# DBTITLE 1,Setup: Base Paths for ORC Files
-# Base path for storing ORC files in DBFS
-dbfs_base_path = "/FileStore/test_data/deltarecon"
+# DBTITLE 1,Setup: Base Paths for ORC Files (NEW LOCATION)
+# Base path for storing ORC files in DBFS (NEW LOCATION)
+dbfs_base_path = "/FileStore/deltarecon_test_data"
 orc_base_path = f"{dbfs_base_path}/orc_files"
 
-# Clean up existing test data (optional - comment out if you want to keep existing data)
-# dbutils.fs.rm(orc_base_path, True)
+print(f"ORC files will be stored at: dbfs:{orc_base_path}")
 
-print(f"ORC files will be stored at: {orc_base_path}")
+# COMMAND ----------
+
+# DBTITLE 1,Helper Function: Generate config_id
+def generate_config_id(prefix: str, table_name: str) -> str:
+    """Generate a UUID-like config_id"""
+    hash_input = f"{prefix}_{table_name}_{datetime.now().timestamp()}"
+    hash_obj = hashlib.md5(hash_input.encode())
+    return hash_obj.hexdigest()
 
 # COMMAND ----------
 
@@ -240,7 +168,7 @@ source_data = [
     (3, "Charlie", 300, 3000.25, "2024-01-03")
 ]
 
-source_schema = StructType([
+source_schema_with_date = StructType([
     StructField("id", IntegerType(), False),
     StructField("name", StringType(), True),
     StructField("amount", IntegerType(), True),
@@ -248,7 +176,7 @@ source_schema = StructType([
     StructField("date_col", StringType(), True)
 ])
 
-source_df = spark.createDataFrame(source_data, source_schema)
+source_df = spark.createDataFrame(source_data, source_schema_with_date)
 orc_path = f"{orc_base_path}/{table_name}/{batch_id}/data.orc"
 source_df.write.mode("overwrite").format("orc").save(orc_path)
 
@@ -270,7 +198,7 @@ source_data = [
     (3, "Charlie", 300, 3000.25, "2024-01-03")
 ]
 
-source_df = spark.createDataFrame(source_data, source_schema)
+source_df = spark.createDataFrame(source_data, source_schema_with_date)
 orc_path = f"{orc_base_path}/{table_name}/{batch_id}/data.orc"
 source_df.write.mode("overwrite").format("orc").save(orc_path)
 
@@ -299,13 +227,6 @@ source_data = [
     (3, "Charlie", 300, 3000.25)
 ]
 
-source_schema = StructType([
-    StructField("id", IntegerType(), False),
-    StructField("name", StringType(), True),
-    StructField("amount", IntegerType(), True),
-    StructField("price", DoubleType(), True)
-])
-
 source_df = spark.createDataFrame(source_data, source_schema)
 orc_path = f"{orc_base_path}/{table_name}/{batch_id}/data.orc"
 source_df.write.mode("overwrite").format("orc").save(orc_path)
@@ -332,17 +253,8 @@ batch_id = "TEST_20250101_120006"
 source_data = [
     (1, "Alice", 100, 1000.50),
     (2, "Bob", 200, 2000.75),
-    (3, "Charlie", 300, 3000.25),
-    (4, "Diana", 400, 4000.00),
-    (5, "Eve", 500, 5000.50)
+    (3, "Charlie", 300, 3000.25)
 ]
-
-source_schema = StructType([
-    StructField("id", IntegerType(), False),
-    StructField("name", StringType(), True),
-    StructField("amount", IntegerType(), True),
-    StructField("price", DoubleType(), True)
-])
 
 source_df = spark.createDataFrame(source_data, source_schema)
 orc_path = f"{orc_base_path}/{table_name}/{batch_id}/data.orc"
@@ -355,69 +267,57 @@ print(f"✅ Created {table_name} - PK will PASS (no duplicates)")
 
 # COMMAND ----------
 
-# DBTITLE 1,Group 1 - Basic: Table 8 - PK FAIL (Duplicates in Source)
+# DBTITLE 1,Group 1 - Basic: Table 8 - PK FAIL (Source has duplicates)
 table_name = "group1_pk_fail_source_duplicates"
 batch_id = "TEST_20250101_120007"
 
-# Source has duplicate IDs
+# Source has duplicate ID
 source_data = [
     (1, "Alice", 100, 1000.50),
     (2, "Bob", 200, 2000.75),
-    (2, "BobDuplicate", 250, 2050.00),  # Duplicate ID!
-    (3, "Charlie", 300, 3000.25),
-    (4, "Diana", 400, 4000.00)
+    (1, "Charlie", 300, 3000.25)  # Duplicate ID!
 ]
 
 source_df = spark.createDataFrame(source_data, source_schema)
 orc_path = f"{orc_base_path}/{table_name}/{batch_id}/data.orc"
 source_df.write.mode("overwrite").format("orc").save(orc_path)
 
-# Target has unique IDs (duplicate removed)
-target_data = [
-    (1, "Alice", 100, 1000.50),
-    (2, "Bob", 200, 2000.75),
-    (3, "Charlie", 300, 3000.25),
-    (4, "Diana", 400, 4000.00)
-]
+# Target has no duplicates
+target_data = [(1, "Alice", 100, 1000.50), (2, "Bob", 200, 2000.75)]
 target_df = spark.createDataFrame(target_data, source_schema).withColumn("_aud_batch_load_id", lit(batch_id))
 target_df.write.mode("overwrite").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
 
-print(f"❌ Created {table_name} - PK will FAIL (source has duplicate ID=2)")
+print(f"❌ Created {table_name} - PK will FAIL (source has duplicate ID=1)")
 
 # COMMAND ----------
 
-# DBTITLE 1,Group 1 - Basic: Table 9 - PK FAIL (Duplicates in Target)
+# DBTITLE 1,Group 1 - Basic: Table 9 - PK FAIL (Target has duplicates)
 table_name = "group1_pk_fail_target_duplicates"
 batch_id = "TEST_20250101_120008"
 
-# Source has unique IDs
 source_data = [
     (1, "Alice", 100, 1000.50),
-    (2, "Bob", 200, 2000.75),
-    (3, "Charlie", 300, 3000.25),
-    (4, "Diana", 400, 4000.00)
+    (2, "Bob", 200, 2000.75)
 ]
 
 source_df = spark.createDataFrame(source_data, source_schema)
 orc_path = f"{orc_base_path}/{table_name}/{batch_id}/data.orc"
 source_df.write.mode("overwrite").format("orc").save(orc_path)
 
-# Target has duplicate IDs
+# Target has duplicate ID
 target_data = [
     (1, "Alice", 100, 1000.50),
     (2, "Bob", 200, 2000.75),
-    (2, "BobDuplicate", 250, 2050.00),  # Duplicate ID!
-    (3, "Charlie", 300, 3000.25),
-    (4, "Diana", 400, 4000.00)
+    (1, "Charlie", 300, 3000.25)  # Duplicate ID!
 ]
 target_df = spark.createDataFrame(target_data, source_schema).withColumn("_aud_batch_load_id", lit(batch_id))
 target_df.write.mode("overwrite").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
 
-print(f"❌ Created {table_name} - PK will FAIL (target has duplicate ID=2)")
+print(f"❌ Created {table_name} - PK will FAIL (target has duplicate ID=1)")
 
 # COMMAND ----------
 
-# DBTITLE 1,Group 1 - Basic: Table 10 - All Checks PASS
+# DBTITLE 1,Group 1 - Basic: Table 10 - ALL PASS (Perfect Match)
 table_name = "group1_all_pass"
 batch_id = "TEST_20250101_120009"
 
@@ -436,110 +336,81 @@ source_df.write.mode("overwrite").format("orc").save(orc_path)
 target_df = source_df.withColumn("_aud_batch_load_id", lit(batch_id))
 target_df.write.mode("overwrite").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
 
-print(f"✅ Created {table_name} - All checks will PASS (perfect match)")
+print(f"✅ Created {table_name} - All validations will PASS")
 
 # COMMAND ----------
 
-# DBTITLE 1,Group 2 - Advanced: Table 1 - Append Mode (Multiple Batches)
+# DBTITLE 1,Group 2 - Advanced: Table 1 - Append Mode with Multiple Batches
 table_name = "group2_append_multiple_batches"
 batch_id_1 = "TEST_20250101_130000"
 batch_id_2 = "TEST_20250101_140000"
 batch_id_3 = "TEST_20250101_150000"
 
 # Batch 1
-source_data_1 = [
-    (1, "Alice", 100, 1000.50),
-    (2, "Bob", 200, 2000.75)
-]
+source_data_1 = [(1, "A", 100, 1000.0), (2, "B", 200, 2000.0)]
 source_df_1 = spark.createDataFrame(source_data_1, source_schema)
 orc_path_1 = f"{orc_base_path}/{table_name}/{batch_id_1}/data.orc"
 source_df_1.write.mode("overwrite").format("orc").save(orc_path_1)
+target_df_1 = source_df_1.withColumn("_aud_batch_load_id", lit(batch_id_1))
+target_df_1.write.mode("append").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
 
 # Batch 2
-source_data_2 = [
-    (3, "Charlie", 300, 3000.25),
-    (4, "Diana", 400, 4000.00)
-]
+source_data_2 = [(3, "C", 300, 3000.0), (4, "D", 400, 4000.0)]
 source_df_2 = spark.createDataFrame(source_data_2, source_schema)
 orc_path_2 = f"{orc_base_path}/{table_name}/{batch_id_2}/data.orc"
 source_df_2.write.mode("overwrite").format("orc").save(orc_path_2)
+target_df_2 = source_df_2.withColumn("_aud_batch_load_id", lit(batch_id_2))
+target_df_2.write.mode("append").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
 
 # Batch 3
-source_data_3 = [
-    (5, "Eve", 500, 5000.50)
-]
+source_data_3 = [(5, "E", 500, 5000.0)]
 source_df_3 = spark.createDataFrame(source_data_3, source_schema)
 orc_path_3 = f"{orc_base_path}/{table_name}/{batch_id_3}/data.orc"
 source_df_3.write.mode("overwrite").format("orc").save(orc_path_3)
+target_df_3 = source_df_3.withColumn("_aud_batch_load_id", lit(batch_id_3))
+target_df_3.write.mode("append").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
 
-# Target has all batches (append mode)
-target_data_all = source_data_1 + source_data_2 + source_data_3
-target_df_all = spark.createDataFrame(target_data_all, source_schema)
-
-# Add batch IDs
-target_df_all = target_df_all.withColumn("_aud_batch_load_id", 
-    when(col("id") <= 2, lit(batch_id_1))
-    .when(col("id") <= 4, lit(batch_id_2))
-    .otherwise(lit(batch_id_3))
-)
-
-target_df_all.write.mode("overwrite").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
-
-print(f"✅ Created {table_name} - Append mode with 3 batches (all will be validated)")
+print(f"✅ Created {table_name} - Append mode with 3 batches")
 
 # COMMAND ----------
 
-# DBTITLE 1,Group 2 - Advanced: Table 2 - Overwrite Mode (Latest Batch Only)
+# DBTITLE 1,Group 2 - Advanced: Table 2 - Overwrite Mode (Latest Only)
 table_name = "group2_overwrite_latest_only"
 batch_id_1 = "TEST_20250101_130000"
 batch_id_2 = "TEST_20250101_140000"
-batch_id_3 = "TEST_20250101_150000"  # Latest
+batch_id_3 = "TEST_20250101_150000"
 
-# Batch 1
-source_data_1 = [
-    (1, "Old1", 100, 1000.50),
-    (2, "Old2", 200, 2000.75)
-]
+# Batch 1 (will be overwritten)
+source_data_1 = [(1, "A", 100, 1000.0), (2, "B", 200, 2000.0)]
 source_df_1 = spark.createDataFrame(source_data_1, source_schema)
 orc_path_1 = f"{orc_base_path}/{table_name}/{batch_id_1}/data.orc"
 source_df_1.write.mode("overwrite").format("orc").save(orc_path_1)
+target_df_1 = source_df_1.withColumn("_aud_batch_load_id", lit(batch_id_1))
+target_df_1.write.mode("overwrite").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
 
-# Batch 2
-source_data_2 = [
-    (3, "Old3", 300, 3000.25),
-    (4, "Old4", 400, 4000.00)
-]
+# Batch 2 (will be overwritten)
+source_data_2 = [(3, "C", 300, 3000.0)]
 source_df_2 = spark.createDataFrame(source_data_2, source_schema)
 orc_path_2 = f"{orc_base_path}/{table_name}/{batch_id_2}/data.orc"
 source_df_2.write.mode("overwrite").format("orc").save(orc_path_2)
+target_df_2 = source_df_2.withColumn("_aud_batch_load_id", lit(batch_id_2))
+target_df_2.write.mode("overwrite").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
 
-# Batch 3 (Latest - overwrite mode should only validate this)
-source_data_3 = [
-    (1, "New1", 150, 1500.00),
-    (2, "New2", 250, 2500.00),
-    (3, "New3", 350, 3500.00)
-]
+# Batch 3 (latest, will be validated)
+source_data_3 = [(10, "Z", 1000, 10000.0)]
 source_df_3 = spark.createDataFrame(source_data_3, source_schema)
 orc_path_3 = f"{orc_base_path}/{table_name}/{batch_id_3}/data.orc"
 source_df_3.write.mode("overwrite").format("orc").save(orc_path_3)
+target_df_3 = source_df_3.withColumn("_aud_batch_load_id", lit(batch_id_3))
+target_df_3.write.mode("overwrite").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
 
-# Target has only latest batch (overwrite mode)
-target_df = spark.createDataFrame(source_data_3, source_schema).withColumn("_aud_batch_load_id", lit(batch_id_3))
-target_df.write.mode("overwrite").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
-
-print(f"✅ Created {table_name} - Overwrite mode (only latest batch will be validated)")
+print(f"✅ Created {table_name} - Overwrite mode (latest batch only)")
 
 # COMMAND ----------
 
-# DBTITLE 1,Group 2 - Advanced: Table 3 - Composite Primary Key
+# DBTITLE 1,Group 2 - Advanced: Table 3 - Composite Primary Key (PASS)
 table_name = "group2_composite_pk"
-
-source_data = [
-    (1, "A", "Alice", 100, 1000.50),
-    (1, "B", "Bob", 200, 2000.75),  # Same id but different code = unique
-    (2, "A", "Charlie", 300, 3000.25),
-    (2, "B", "Diana", 400, 4000.00)
-]
+batch_id = "TEST_20250101_160000"
 
 source_schema_composite = StructType([
     StructField("id", IntegerType(), False),
@@ -549,77 +420,68 @@ source_schema_composite = StructType([
     StructField("price", DoubleType(), True)
 ])
 
+source_data = [
+    (1, "A", "Alice", 100, 1000.50),
+    (1, "B", "Bob", 200, 2000.75),
+    (2, "A", "Charlie", 300, 3000.25)
+]
+
 source_df = spark.createDataFrame(source_data, source_schema_composite)
-batch_id = "TEST_20250101_160000"
 orc_path = f"{orc_base_path}/{table_name}/{batch_id}/data.orc"
 source_df.write.mode("overwrite").format("orc").save(orc_path)
 
 target_df = source_df.withColumn("_aud_batch_load_id", lit(batch_id))
 target_df.write.mode("overwrite").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
 
-print(f"✅ Created {table_name} - Composite PK (id, code) - all unique")
+print(f"✅ Created {table_name} - Composite PK (id|code) will PASS")
 
 # COMMAND ----------
 
-# DBTITLE 1,Group 2 - Advanced: Table 4 - Composite PK with Duplicates
+# DBTITLE 1,Group 2 - Advanced: Table 4 - Composite Primary Key (FAIL)
 table_name = "group2_composite_pk_fail"
+batch_id = "TEST_20250101_160001"
 
 source_data = [
     (1, "A", "Alice", 100, 1000.50),
-    (1, "A", "AliceDuplicate", 150, 1050.00),  # Duplicate composite key!
-    (2, "B", "Bob", 200, 2000.75)
+    (1, "B", "Bob", 200, 2000.75),
+    (1, "A", "Charlie", 300, 3000.25)  # Duplicate composite key (1, A)!
 ]
 
 source_df = spark.createDataFrame(source_data, source_schema_composite)
-batch_id = "TEST_20250101_160001"
 orc_path = f"{orc_base_path}/{table_name}/{batch_id}/data.orc"
 source_df.write.mode("overwrite").format("orc").save(orc_path)
 
-# Target has unique keys (duplicate removed)
-target_data = [
-    (1, "A", "Alice", 100, 1000.50),
-    (2, "B", "Bob", 200, 2000.75)
-]
+# Target has no duplicates
+target_data = source_data[:2]
 target_df = spark.createDataFrame(target_data, source_schema_composite).withColumn("_aud_batch_load_id", lit(batch_id))
 target_df.write.mode("overwrite").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
 
-print(f"❌ Created {table_name} - Composite PK FAIL (source has duplicate (1, 'A'))")
+print(f"❌ Created {table_name} - Composite PK will FAIL (source has duplicate (1, A))")
 
 # COMMAND ----------
 
 # DBTITLE 1,Group 2 - Advanced: Table 5 - Partitioned Table
 table_name = "group2_partitioned"
-
-source_data = [
-    (1, "Alice", 100, 1000.50, "2024-01-01"),
-    (2, "Bob", 200, 2000.75, "2024-01-01"),
-    (3, "Charlie", 300, 3000.25, "2024-01-02"),
-    (4, "Diana", 400, 4000.00, "2024-01-02"),
-    (5, "Eve", 500, 5000.50, "2024-01-03")
-]
+batch_id = "TEST_20250101_170000"
 
 source_schema_partitioned = StructType([
     StructField("id", IntegerType(), False),
     StructField("name", StringType(), True),
     StructField("amount", IntegerType(), True),
     StructField("price", DoubleType(), True),
-    StructField("date_partition", StringType(), True)
+    StructField("date_partition", DateType(), True)
 ])
 
+source_data = [
+    (1, "Alice", 100, 1000.50, datetime(2024, 1, 1).date()),
+    (2, "Bob", 200, 2000.75, datetime(2024, 1, 1).date()),
+    (3, "Charlie", 300, 3000.25, datetime(2024, 1, 2).date())
+]
+
 source_df = spark.createDataFrame(source_data, source_schema_partitioned)
-batch_id = "TEST_20250101_170000"
+orc_path = f"{orc_base_path}/{table_name}/{batch_id}/data.orc"
+source_df.write.mode("overwrite").format("orc").save(orc_path)
 
-# Save with partition structure in path
-orc_path = f"{orc_base_path}/{table_name}/date_partition=2024-01-01/{batch_id}/data.orc"
-source_df.filter(col("date_partition") == "2024-01-01").drop("date_partition").write.mode("overwrite").format("orc").save(orc_path)
-
-orc_path_2 = f"{orc_base_path}/{table_name}/date_partition=2024-01-02/{batch_id}/data.orc"
-source_df.filter(col("date_partition") == "2024-01-02").drop("date_partition").write.mode("overwrite").format("orc").save(orc_path_2)
-
-orc_path_3 = f"{orc_base_path}/{table_name}/date_partition=2024-01-03/{batch_id}/data.orc"
-source_df.filter(col("date_partition") == "2024-01-03").drop("date_partition").write.mode("overwrite").format("orc").save(orc_path_3)
-
-# Target Delta table (partitioned)
 target_df = source_df.withColumn("_aud_batch_load_id", lit(batch_id))
 target_df.write.mode("overwrite").format("delta").partitionBy("date_partition").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
 
@@ -629,6 +491,7 @@ print(f"✅ Created {table_name} - Partitioned table (date_partition)")
 
 # DBTITLE 1,Group 2 - Advanced: Table 6 - No Primary Key (PK Check Skipped)
 table_name = "group2_no_pk"
+batch_id = "TEST_20250101_180000"
 
 source_data = [
     (1, "Alice", 100, 1000.50),
@@ -636,15 +499,7 @@ source_data = [
     (3, "Charlie", 300, 3000.25)
 ]
 
-source_schema = StructType([
-    StructField("id", IntegerType(), False),
-    StructField("name", StringType(), True),
-    StructField("amount", IntegerType(), True),
-    StructField("price", DoubleType(), True)
-])
-
 source_df = spark.createDataFrame(source_data, source_schema)
-batch_id = "TEST_20250101_180000"
 orc_path = f"{orc_base_path}/{table_name}/{batch_id}/data.orc"
 source_df.write.mode("overwrite").format("orc").save(orc_path)
 
@@ -655,60 +510,530 @@ print(f"✅ Created {table_name} - No PK defined (PK check will be SKIPPED)")
 
 # COMMAND ----------
 
-# DBTITLE 1,Populate Ingestion Config Table
-# Clear existing data
-spark.sql(f"TRUNCATE TABLE {constants.INGESTION_CONFIG_TABLE}")
+# DBTITLE 1,Populate Ingestion Config Table (INSERT)
+# Switch back to ingestion schema
+spark.sql(f"USE CATALOG {constants.INGESTION_OPS_CATALOG}")
+spark.sql(f"USE SCHEMA {constants.INGESTION_OPS_SCHEMA.split('.')[1]}")
+
+base_time = datetime.now()
 
 # Group 1 - Basic tables
 config_data_group1 = [
-    ("group1_basic", "ts42_demo", "taxi_example", "group1_rowcount_pass", "source_system", "group1_rowcount_pass", "append", "id", None, "Y"),
-    ("group1_basic", "ts42_demo", "taxi_example", "group1_rowcount_fail_source_more", "source_system", "group1_rowcount_fail_source_more", "append", "id", None, "Y"),
-    ("group1_basic", "ts42_demo", "taxi_example", "group1_rowcount_fail_target_more", "source_system", "group1_rowcount_fail_target_more", "append", "id", None, "Y"),
-    ("group1_basic", "ts42_demo", "taxi_example", "group1_schema_pass", "source_system", "group1_schema_pass", "append", "id", None, "Y"),
-    ("group1_basic", "ts42_demo", "taxi_example", "group1_schema_fail_missing_col", "source_system", "group1_schema_fail_missing_col", "append", "id", None, "Y"),
-    ("group1_basic", "ts42_demo", "taxi_example", "group1_schema_fail_type_mismatch", "source_system", "group1_schema_fail_type_mismatch", "append", "id", None, "Y"),
-    ("group1_basic", "ts42_demo", "taxi_example", "group1_pk_pass", "source_system", "group1_pk_pass", "append", "id", None, "Y"),
-    ("group1_basic", "ts42_demo", "taxi_example", "group1_pk_fail_source_duplicates", "source_system", "group1_pk_fail_source_duplicates", "append", "id", None, "Y"),
-    ("group1_basic", "ts42_demo", "taxi_example", "group1_pk_fail_target_duplicates", "source_system", "group1_pk_fail_target_duplicates", "append", "id", None, "Y"),
-    ("group1_basic", "ts42_demo", "taxi_example", "group1_all_pass", "source_system", "group1_all_pass", "append", "id", None, "Y"),
+    (
+        generate_config_id("group1", "group1_rowcount_pass"),
+        "group1_basic",
+        "source_system",
+        "group1_rowcount_pass",
+        f"dbfs:{orc_base_path}/group1_rowcount_pass",
+        "ts42_demo",
+        "taxi_example",
+        "group1_rowcount_pass",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group1", "group1_rowcount_fail_source_more"),
+        "group1_basic",
+        "source_system",
+        "group1_rowcount_fail_source_more",
+        f"dbfs:{orc_base_path}/group1_rowcount_fail_source_more",
+        "ts42_demo",
+        "taxi_example",
+        "group1_rowcount_fail_source_more",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group1", "group1_rowcount_fail_target_more"),
+        "group1_basic",
+        "source_system",
+        "group1_rowcount_fail_target_more",
+        f"dbfs:{orc_base_path}/group1_rowcount_fail_target_more",
+        "ts42_demo",
+        "taxi_example",
+        "group1_rowcount_fail_target_more",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group1", "group1_schema_pass"),
+        "group1_basic",
+        "source_system",
+        "group1_schema_pass",
+        f"dbfs:{orc_base_path}/group1_schema_pass",
+        "ts42_demo",
+        "taxi_example",
+        "group1_schema_pass",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group1", "group1_schema_fail_missing_col"),
+        "group1_basic",
+        "source_system",
+        "group1_schema_fail_missing_col",
+        f"dbfs:{orc_base_path}/group1_schema_fail_missing_col",
+        "ts42_demo",
+        "taxi_example",
+        "group1_schema_fail_missing_col",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group1", "group1_schema_fail_type_mismatch"),
+        "group1_basic",
+        "source_system",
+        "group1_schema_fail_type_mismatch",
+        f"dbfs:{orc_base_path}/group1_schema_fail_type_mismatch",
+        "ts42_demo",
+        "taxi_example",
+        "group1_schema_fail_type_mismatch",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group1", "group1_pk_pass"),
+        "group1_basic",
+        "source_system",
+        "group1_pk_pass",
+        f"dbfs:{orc_base_path}/group1_pk_pass",
+        "ts42_demo",
+        "taxi_example",
+        "group1_pk_pass",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group1", "group1_pk_fail_source_duplicates"),
+        "group1_basic",
+        "source_system",
+        "group1_pk_fail_source_duplicates",
+        f"dbfs:{orc_base_path}/group1_pk_fail_source_duplicates",
+        "ts42_demo",
+        "taxi_example",
+        "group1_pk_fail_source_duplicates",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group1", "group1_pk_fail_target_duplicates"),
+        "group1_basic",
+        "source_system",
+        "group1_pk_fail_target_duplicates",
+        f"dbfs:{orc_base_path}/group1_pk_fail_target_duplicates",
+        "ts42_demo",
+        "taxi_example",
+        "group1_pk_fail_target_duplicates",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group1", "group1_all_pass"),
+        "group1_basic",
+        "source_system",
+        "group1_all_pass",
+        f"dbfs:{orc_base_path}/group1_all_pass",
+        "ts42_demo",
+        "taxi_example",
+        "group1_all_pass",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
 ]
 
 # Group 2 - Advanced tables
 config_data_group2 = [
-    ("group2_advanced", "ts42_demo", "taxi_example", "group2_append_multiple_batches", "source_system", "group2_append_multiple_batches", "append", "id", None, "Y"),
-    ("group2_advanced", "ts42_demo", "taxi_example", "group2_overwrite_latest_only", "source_system", "group2_overwrite_latest_only", "overwrite", "id", None, "Y"),
-    ("group2_advanced", "ts42_demo", "taxi_example", "group2_composite_pk", "source_system", "group2_composite_pk", "append", "id|code", None, "Y"),
-    ("group2_advanced", "ts42_demo", "taxi_example", "group2_composite_pk_fail", "source_system", "group2_composite_pk_fail", "append", "id|code", None, "Y"),
-    ("group2_advanced", "ts42_demo", "taxi_example", "group2_partitioned", "source_system", "group2_partitioned", "append", "id", "date_partition", "Y"),
-    ("group2_advanced", "ts42_demo", "taxi_example", "group2_no_pk", "source_system", "group2_no_pk", "append", None, None, "Y"),
+    (
+        generate_config_id("group2", "group2_append_multiple_batches"),
+        "group2_advanced",
+        "source_system",
+        "group2_append_multiple_batches",
+        f"dbfs:{orc_base_path}/group2_append_multiple_batches",
+        "ts42_demo",
+        "taxi_example",
+        "group2_append_multiple_batches",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group2", "group2_overwrite_latest_only"),
+        "group2_advanced",
+        "source_system",
+        "group2_overwrite_latest_only",
+        f"dbfs:{orc_base_path}/group2_overwrite_latest_only",
+        "ts42_demo",
+        "taxi_example",
+        "group2_overwrite_latest_only",
+        "orc",
+        None,
+        "incremental",
+        "overwrite",
+        "id",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group2", "group2_composite_pk"),
+        "group2_advanced",
+        "source_system",
+        "group2_composite_pk",
+        f"dbfs:{orc_base_path}/group2_composite_pk",
+        "ts42_demo",
+        "taxi_example",
+        "group2_composite_pk",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id|code",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group2", "group2_composite_pk_fail"),
+        "group2_advanced",
+        "source_system",
+        "group2_composite_pk_fail",
+        f"dbfs:{orc_base_path}/group2_composite_pk_fail",
+        "ts42_demo",
+        "taxi_example",
+        "group2_composite_pk_fail",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id|code",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group2", "group2_partitioned"),
+        "group2_advanced",
+        "source_system",
+        "group2_partitioned",
+        f"dbfs:{orc_base_path}/group2_partitioned",
+        "ts42_demo",
+        "taxi_example",
+        "group2_partitioned",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        "id",
+        "date_partition",
+        "PARTITIONED_BY",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
+    (
+        generate_config_id("group2", "group2_no_pk"),
+        "group2_advanced",
+        "source_system",
+        "group2_no_pk",
+        f"dbfs:{orc_base_path}/group2_no_pk",
+        "ts42_demo",
+        "taxi_example",
+        "group2_no_pk",
+        "orc",
+        None,
+        "incremental",
+        "append",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "Y",
+        base_time,
+        None,
+        None,
+        None,
+        None
+    ),
 ]
 
+# Create DataFrame with all columns matching the actual schema
 config_schema = StructType([
-    StructField("group_name", StringType(), False),
-    StructField("target_catalog", StringType(), False),
-    StructField("target_schema", StringType(), False),
-    StructField("target_table", StringType(), False),
-    StructField("source_schema", StringType(), False),
-    StructField("source_table", StringType(), False),
-    StructField("write_mode", StringType(), False),
+    StructField("config_id", StringType(), False),
+    StructField("group_name", StringType(), True),
+    StructField("source_schema", StringType(), True),
+    StructField("source_table", StringType(), True),
+    StructField("source_file_path", StringType(), True),
+    StructField("target_catalog", StringType(), True),
+    StructField("target_schema", StringType(), True),
+    StructField("target_table", StringType(), True),
+    StructField("source_file_format", StringType(), True),
+    StructField("source_file_options", StringType(), True),
+    StructField("load_type", StringType(), True),
+    StructField("write_mode", StringType(), True),
     StructField("primary_key", StringType(), True),
     StructField("partition_column", StringType(), True),
-    StructField("is_active", StringType(), False)
+    StructField("partitioning_strategy", StringType(), True),
+    StructField("frequency", StringType(), True),
+    StructField("table_size_gb", StringType(), True),
+    StructField("column_datatype_mapping", StringType(), True),
+    StructField("delta_properties", StringType(), True),
+    StructField("clean_column_names", StringType(), True),
+    StructField("deduplicate", StringType(), True),
+    StructField("is_active", StringType(), True),
+    StructField("insert_ts", TimestampType(), True),
+    StructField("last_update_ts", TimestampType(), True),
+    StructField("timestamp_column", StringType(), True),
+    StructField("schedule", StringType(), True),
+    StructField("job_tags", StringType(), True),
 ])
 
 all_config_data = config_data_group1 + config_data_group2
 config_df = spark.createDataFrame(all_config_data, config_schema)
-config_df.write.mode("overwrite").format("delta").saveAsTable(constants.INGESTION_CONFIG_TABLE)
 
-print(f"✅ Populated {constants.INGESTION_CONFIG_TABLE} with {len(all_config_data)} records")
+# Use INSERT INTO instead of TRUNCATE + overwrite
+config_df.write.mode("append").format("delta").saveAsTable(constants.INGESTION_CONFIG_TABLE)
+
+print(f"✅ Inserted {len(all_config_data)} records into {constants.INGESTION_CONFIG_TABLE}")
 
 # COMMAND ----------
 
-# DBTITLE 1,Populate Ingestion Audit Table
-# Clear existing data
-spark.sql(f"TRUNCATE TABLE {constants.INGESTION_AUDIT_TABLE}")
-
-base_time = datetime(2025, 1, 1, 12, 0, 0)
+# DBTITLE 1,Populate Ingestion Audit Table (INSERT)
+# Generate run_id for each audit entry
+def generate_run_id():
+    return hashlib.md5(f"run_{datetime.now().timestamp()}_{random.random()}".encode()).hexdigest()
 
 # Group 1 tables - single batch each
 audit_data_group1 = []
@@ -719,58 +1044,119 @@ for i, table in enumerate([
     "group1_all_pass"
 ]):
     batch_id = f"TEST_20250101_{120000 + i:06d}"
+    config_id = config_data_group1[i][0]  # Get config_id from config_data
     audit_data_group1.append((
+        generate_run_id(),
+        config_id,
         batch_id,
-        f"ts42_demo.taxi_example.{table}",
-        "COMPLETED",
         "group1_basic",
+        f"ts42_demo.taxi_example.{table}",
+        "incremental_batch_ingestion",
+        "incremental",
+        "COMPLETED",
         base_time + timedelta(minutes=i),
-        base_time + timedelta(minutes=i+1)
+        base_time + timedelta(minutes=i+1),
+        None,
+        -1,
+        -1
     ))
 
 # Group 2 tables
-audit_data_group2 = [
-    # Append mode - 3 batches
-    ("TEST_20250101_130000", "ts42_demo.taxi_example.group2_append_multiple_batches", "COMPLETED", "group2_advanced", base_time + timedelta(hours=1), base_time + timedelta(hours=1, minutes=1)),
-    ("TEST_20250101_140000", "ts42_demo.taxi_example.group2_append_multiple_batches", "COMPLETED", "group2_advanced", base_time + timedelta(hours=2), base_time + timedelta(hours=2, minutes=1)),
-    ("TEST_20250101_150000", "ts42_demo.taxi_example.group2_append_multiple_batches", "COMPLETED", "group2_advanced", base_time + timedelta(hours=3), base_time + timedelta(hours=3, minutes=1)),
-    
-    # Overwrite mode - 3 batches (latest will be validated)
-    ("TEST_20250101_130000", "ts42_demo.taxi_example.group2_overwrite_latest_only", "COMPLETED", "group2_advanced", base_time + timedelta(hours=1), base_time + timedelta(hours=1, minutes=1)),
-    ("TEST_20250101_140000", "ts42_demo.taxi_example.group2_overwrite_latest_only", "COMPLETED", "group2_advanced", base_time + timedelta(hours=2), base_time + timedelta(hours=2, minutes=1)),
-    ("TEST_20250101_150000", "ts42_demo.taxi_example.group2_overwrite_latest_only", "COMPLETED", "group2_advanced", base_time + timedelta(hours=3), base_time + timedelta(hours=3, minutes=1)),
-    
-    # Other group2 tables
-    ("TEST_20250101_160000", "ts42_demo.taxi_example.group2_composite_pk", "COMPLETED", "group2_advanced", base_time + timedelta(hours=4), base_time + timedelta(hours=4, minutes=1)),
-    ("TEST_20250101_160001", "ts42_demo.taxi_example.group2_composite_pk_fail", "COMPLETED", "group2_advanced", base_time + timedelta(hours=4, minutes=1), base_time + timedelta(hours=4, minutes=2)),
-    ("TEST_20250101_170000", "ts42_demo.taxi_example.group2_partitioned", "COMPLETED", "group2_advanced", base_time + timedelta(hours=5), base_time + timedelta(hours=5, minutes=1)),
-    ("TEST_20250101_180000", "ts42_demo.taxi_example.group2_no_pk", "COMPLETED", "group2_advanced", base_time + timedelta(hours=6), base_time + timedelta(hours=6, minutes=1)),
+audit_data_group2 = []
+# Append mode - 3 batches
+for i, batch_id in enumerate(["TEST_20250101_130000", "TEST_20250101_140000", "TEST_20250101_150000"]):
+    config_id = config_data_group2[0][0]  # group2_append_multiple_batches
+    audit_data_group2.append((
+        generate_run_id(),
+        config_id,
+        batch_id,
+        "group2_advanced",
+        "ts42_demo.taxi_example.group2_append_multiple_batches",
+        "incremental_batch_ingestion",
+        "incremental",
+        "COMPLETED",
+        base_time + timedelta(hours=1+i),
+        base_time + timedelta(hours=1+i, minutes=1),
+        None,
+        -1,
+        -1
+    ))
+
+# Overwrite mode - 3 batches (latest will be validated)
+for i, batch_id in enumerate(["TEST_20250101_130000", "TEST_20250101_140000", "TEST_20250101_150000"]):
+    config_id = config_data_group2[1][0]  # group2_overwrite_latest_only
+    audit_data_group2.append((
+        generate_run_id(),
+        config_id,
+        batch_id,
+        "group2_advanced",
+        "ts42_demo.taxi_example.group2_overwrite_latest_only",
+        "incremental_batch_ingestion",
+        "incremental",
+        "COMPLETED",
+        base_time + timedelta(hours=1+i),
+        base_time + timedelta(hours=1+i, minutes=1),
+        None,
+        -1,
+        -1
+    ))
+
+# Other group2 tables
+other_tables = [
+    ("group2_composite_pk", "TEST_20250101_160000"),
+    ("group2_composite_pk_fail", "TEST_20250101_160001"),
+    ("group2_partitioned", "TEST_20250101_170000"),
+    ("group2_no_pk", "TEST_20250101_180000")
 ]
+for i, (table, batch_id) in enumerate(other_tables):
+    config_id = config_data_group2[2+i][0]  # Get config_id from config_data
+    audit_data_group2.append((
+        generate_run_id(),
+        config_id,
+        batch_id,
+        "group2_advanced",
+        f"ts42_demo.taxi_example.{table}",
+        "incremental_batch_ingestion",
+        "incremental",
+        "COMPLETED",
+        base_time + timedelta(hours=4+i),
+        base_time + timedelta(hours=4+i, minutes=1),
+        None,
+        -1,
+        -1
+    ))
 
 audit_schema = StructType([
-    StructField("batch_load_id", StringType(), False),
-    StructField("target_table_name", StringType(), False),
-    StructField("status", StringType(), False),
-    StructField("group_name", StringType(), False),
-    StructField("load_start_time", TimestampType(), False),
-    StructField("load_end_time", TimestampType(), False)
+    StructField("run_id", StringType(), False),
+    StructField("config_id", StringType(), True),
+    StructField("batch_load_id", StringType(), True),
+    StructField("group_name", StringType(), True),
+    StructField("target_table_name", StringType(), True),
+    StructField("operation_type", StringType(), True),
+    StructField("load_type", StringType(), True),
+    StructField("status", StringType(), True),
+    StructField("start_ts", TimestampType(), True),
+    StructField("end_ts", TimestampType(), True),
+    StructField("log_message", StringType(), True),
+    StructField("microbatch_id", IntegerType(), True),
+    StructField("row_count", LongType(), True),
 ])
 
 all_audit_data = audit_data_group1 + audit_data_group2
 audit_df = spark.createDataFrame(all_audit_data, audit_schema)
-audit_df.write.mode("overwrite").format("delta").saveAsTable(constants.INGESTION_AUDIT_TABLE)
 
-print(f"✅ Populated {constants.INGESTION_AUDIT_TABLE} with {len(all_audit_data)} records")
+# Use INSERT INTO instead of TRUNCATE + overwrite
+audit_df.write.mode("append").format("delta").saveAsTable(constants.INGESTION_AUDIT_TABLE)
+
+print(f"✅ Inserted {len(all_audit_data)} records into {constants.INGESTION_AUDIT_TABLE}")
 
 # COMMAND ----------
 
-# DBTITLE 1,Populate Ingestion Metadata Table
-# Clear existing data
-spark.sql(f"TRUNCATE TABLE {constants.INGESTION_METADATA_TABLE}")
-
+# DBTITLE 1,Populate Ingestion Metadata Table (INSERT)
+# This table tracks which ORC files belong to which batch
 metadata_data = []
 
-# Group 1 tables - single ORC file each
+# Group 1 tables
 for i, table in enumerate([
     "group1_rowcount_pass", "group1_rowcount_fail_source_more", "group1_rowcount_fail_target_more",
     "group1_schema_pass", "group1_schema_fail_missing_col", "group1_schema_fail_type_mismatch",
@@ -778,144 +1164,164 @@ for i, table in enumerate([
     "group1_all_pass"
 ]):
     batch_id = f"TEST_20250101_{120000 + i:06d}"
-    orc_path = f"{orc_base_path}/{table}/{batch_id}/data.orc"
+    full_table_name = f"ts42_demo.taxi_example.{table}"
+    orc_file_path = f"dbfs:{orc_base_path}/{table}/{batch_id}/data.orc"
+    
+    # Get file size (approximate)
+    try:
+        file_size = dbutils.fs.ls(orc_file_path.replace("dbfs:", "/dbfs"))[0].size if len(dbutils.fs.ls(orc_file_path.replace("dbfs:", "/dbfs"))) > 0 else 1000
+    except:
+        file_size = 1000
+    
     metadata_data.append((
-        f"ts42_demo.taxi_example.{table}",
+        full_table_name,
         batch_id,
-        f"dbfs:{orc_path}",
-        1024,  # file_size
-        5  # record_count (approximate)
+        orc_file_path,
+        base_time + timedelta(minutes=i),
+        file_size,
+        "N",  # is_processed
+        base_time + timedelta(minutes=i),
+        base_time + timedelta(minutes=i)
     ))
 
 # Group 2 tables
-# Append mode - 3 files
-for batch_id in ["TEST_20250101_130000", "TEST_20250101_140000", "TEST_20250101_150000"]:
-    orc_path = f"{orc_base_path}/group2_append_multiple_batches/{batch_id}/data.orc"
+# Append mode - 3 batches
+for i, batch_id in enumerate(["TEST_20250101_130000", "TEST_20250101_140000", "TEST_20250101_150000"]):
+    table = "group2_append_multiple_batches"
+    full_table_name = f"ts42_demo.taxi_example.{table}"
+    orc_file_path = f"dbfs:{orc_base_path}/{table}/{batch_id}/data.orc"
+    
+    try:
+        file_size = dbutils.fs.ls(orc_file_path.replace("dbfs:", "/dbfs"))[0].size if len(dbutils.fs.ls(orc_file_path.replace("dbfs:", "/dbfs"))) > 0 else 1000
+    except:
+        file_size = 1000
+    
     metadata_data.append((
-        "ts42_demo.taxi_example.group2_append_multiple_batches",
+        full_table_name,
         batch_id,
-        f"dbfs:{orc_path}",
-        1024,
-        2
+        orc_file_path,
+        base_time + timedelta(hours=1+i),
+        file_size,
+        "N",
+        base_time + timedelta(hours=1+i),
+        base_time + timedelta(hours=1+i)
     ))
 
-# Overwrite mode - 3 files
-for batch_id in ["TEST_20250101_130000", "TEST_20250101_140000", "TEST_20250101_150000"]:
-    orc_path = f"{orc_base_path}/group2_overwrite_latest_only/{batch_id}/data.orc"
+# Overwrite mode - 3 batches
+for i, batch_id in enumerate(["TEST_20250101_130000", "TEST_20250101_140000", "TEST_20250101_150000"]):
+    table = "group2_overwrite_latest_only"
+    full_table_name = f"ts42_demo.taxi_example.{table}"
+    orc_file_path = f"dbfs:{orc_base_path}/{table}/{batch_id}/data.orc"
+    
+    try:
+        file_size = dbutils.fs.ls(orc_file_path.replace("dbfs:", "/dbfs"))[0].size if len(dbutils.fs.ls(orc_file_path.replace("dbfs:", "/dbfs"))) > 0 else 1000
+    except:
+        file_size = 1000
+    
     metadata_data.append((
-        "ts42_demo.taxi_example.group2_overwrite_latest_only",
+        full_table_name,
         batch_id,
-        f"dbfs:{orc_path}",
-        1024,
-        2
+        orc_file_path,
+        base_time + timedelta(hours=1+i),
+        file_size,
+        "N",
+        base_time + timedelta(hours=1+i),
+        base_time + timedelta(hours=1+i)
     ))
 
 # Other group2 tables
-for table, batch_id in [
+other_tables = [
     ("group2_composite_pk", "TEST_20250101_160000"),
     ("group2_composite_pk_fail", "TEST_20250101_160001"),
+    ("group2_partitioned", "TEST_20250101_170000"),
     ("group2_no_pk", "TEST_20250101_180000")
-]:
-    orc_path = f"{orc_base_path}/{table}/{batch_id}/data.orc"
+]
+for i, (table, batch_id) in enumerate(other_tables):
+    full_table_name = f"ts42_demo.taxi_example.{table}"
+    orc_file_path = f"dbfs:{orc_base_path}/{table}/{batch_id}/data.orc"
+    
+    try:
+        file_size = dbutils.fs.ls(orc_file_path.replace("dbfs:", "/dbfs"))[0].size if len(dbutils.fs.ls(orc_file_path.replace("dbfs:", "/dbfs"))) > 0 else 1000
+    except:
+        file_size = 1000
+    
     metadata_data.append((
-        f"ts42_demo.taxi_example.{table}",
+        full_table_name,
         batch_id,
-        f"dbfs:{orc_path}",
-        1024,
-        4
-    ))
-
-# Partitioned table - 3 files (one per partition)
-for partition in ["2024-01-01", "2024-01-02", "2024-01-03"]:
-    batch_id = "TEST_20250101_170000"
-    orc_path = f"{orc_base_path}/group2_partitioned/date_partition={partition}/{batch_id}/data.orc"
-    metadata_data.append((
-        "ts42_demo.taxi_example.group2_partitioned",
-        batch_id,
-        f"dbfs:{orc_path}",
-        1024,
-        2
+        orc_file_path,
+        base_time + timedelta(hours=4+i),
+        file_size,
+        "N",
+        base_time + timedelta(hours=4+i),
+        base_time + timedelta(hours=4+i)
     ))
 
 metadata_schema = StructType([
     StructField("table_name", StringType(), False),
     StructField("batch_load_id", StringType(), False),
-    StructField("source_file_path", StringType(), False),
-    StructField("file_size", LongType(), False),
-    StructField("record_count", LongType(), False)
+    StructField("source_file_path", StringType(), True),
+    StructField("file_modification_time", TimestampType(), True),
+    StructField("file_size", LongType(), True),
+    StructField("is_processed", StringType(), True),
+    StructField("insert_ts", TimestampType(), True),
+    StructField("last_update_ts", TimestampType(), True),
 ])
 
 metadata_df = spark.createDataFrame(metadata_data, metadata_schema)
-metadata_df.write.mode("overwrite").format("delta").saveAsTable(constants.INGESTION_METADATA_TABLE)
 
-print(f"✅ Populated {constants.INGESTION_METADATA_TABLE} with {len(metadata_data)} records")
+# Use INSERT INTO instead of TRUNCATE + overwrite
+metadata_df.write.mode("append").format("delta").saveAsTable(constants.INGESTION_METADATA_TABLE)
+
+print(f"✅ Inserted {len(metadata_data)} records into {constants.INGESTION_METADATA_TABLE}")
 
 # COMMAND ----------
 
-# DBTITLE 1,Populate Partition Mapping Table
-# Clear existing data
-spark.sql(f"TRUNCATE TABLE {constants.INGESTION_SRC_TABLE_PARTITION_MAPPING}")
-
+# DBTITLE 1,Populate Source Table Partition Mapping (INSERT)
+# Only group2_partitioned has partitions
 partition_mapping_data = [
-    ("taxi_example", "group2_partitioned", "date_partition", "string", 0)
+    (
+        "source_system",
+        "group2_partitioned",
+        "date_partition",
+        "date",
+        "DATE",
+        0,
+        base_time,
+        base_time
+    )
 ]
 
 partition_mapping_schema = StructType([
     StructField("schema_name", StringType(), False),
     StructField("table_name", StringType(), False),
-    StructField("partition_column_name", StringType(), False),
-    StructField("datatype", StringType(), False),
-    StructField("index", IntegerType(), False)
+    StructField("partition_column_name", StringType(), True),
+    StructField("datatype", StringType(), True),
+    StructField("derived_datatype", StringType(), True),
+    StructField("index", IntegerType(), True),
+    StructField("insert_ts", TimestampType(), True),
+    StructField("last_update_ts", TimestampType(), True),
 ])
 
 partition_mapping_df = spark.createDataFrame(partition_mapping_data, partition_mapping_schema)
-partition_mapping_df.write.mode("overwrite").format("delta").saveAsTable(constants.INGESTION_SRC_TABLE_PARTITION_MAPPING)
 
-print(f"✅ Populated {constants.INGESTION_SRC_TABLE_PARTITION_MAPPING} with {len(partition_mapping_data)} records")
+# Use INSERT INTO instead of TRUNCATE + overwrite
+partition_mapping_df.write.mode("append").format("delta").saveAsTable(constants.INGESTION_SRC_TABLE_PARTITION_MAPPING)
+
+print(f"✅ Inserted {len(partition_mapping_data)} records into {constants.INGESTION_SRC_TABLE_PARTITION_MAPPING}")
 
 # COMMAND ----------
 
 # DBTITLE 1,Summary
 print("=" * 80)
-print("TEST DATA SETUP COMPLETE")
+print("SETUP COMPLETE!")
 print("=" * 80)
-
-print("\n📊 Table Groups Created:")
-print("\n1. group1_basic (10 tables):")
-print("   ✅ group1_rowcount_pass - Row count PASS")
-print("   ❌ group1_rowcount_fail_source_more - Row count FAIL (source has more)")
-print("   ❌ group1_rowcount_fail_target_more - Row count FAIL (target has more)")
-print("   ✅ group1_schema_pass - Schema PASS")
-print("   ❌ group1_schema_fail_missing_col - Schema FAIL (missing column)")
-print("   ❌ group1_schema_fail_type_mismatch - Schema FAIL (type mismatch)")
-print("   ✅ group1_pk_pass - PK PASS")
-print("   ❌ group1_pk_fail_source_duplicates - PK FAIL (duplicates in source)")
-print("   ❌ group1_pk_fail_target_duplicates - PK FAIL (duplicates in target)")
-print("   ✅ group1_all_pass - All checks PASS")
-
-print("\n2. group2_advanced (6 tables):")
-print("   ✅ group2_append_multiple_batches - Append mode (3 batches)")
-print("   ✅ group2_overwrite_latest_only - Overwrite mode (only latest validated)")
-print("   ✅ group2_composite_pk - Composite primary key (id, code)")
-print("   ❌ group2_composite_pk_fail - Composite PK FAIL (duplicates)")
-print("   ✅ group2_partitioned - Partitioned table")
-print("   ✅ group2_no_pk - No PK defined (PK check skipped)")
-
-print("\n📁 Metadata Tables Populated:")
-print(f"   ✅ {constants.INGESTION_CONFIG_TABLE}")
-print(f"   ✅ {constants.INGESTION_AUDIT_TABLE}")
-print(f"   ✅ {constants.INGESTION_METADATA_TABLE}")
-print(f"   ✅ {constants.INGESTION_SRC_TABLE_PARTITION_MAPPING}")
-
-print("\n📂 ORC Files Location:")
-print(f"   {orc_base_path}")
-
-print("\n✅ Next Steps:")
-print("   1. Run 02_setup_validation_mapping.py to sync validation_mapping")
-print("   2. Run validation framework with:")
-print("      - table_group='group1_basic'")
-print("      - table_group='group2_advanced'")
-print("   3. Review validation results in validation_log and validation_summary tables")
-
+print(f"\n✅ Created {len(config_data_group1 + config_data_group2)} test tables")
+print(f"✅ Created ORC files in: dbfs:{orc_base_path}")
+print(f"✅ Inserted {len(all_config_data)} records into ingestion_config")
+print(f"✅ Inserted {len(all_audit_data)} records into ingestion_audit")
+print(f"✅ Inserted {len(metadata_data)} records into ingestion_metadata")
+print(f"✅ Inserted {len(partition_mapping_data)} records into partition_mapping")
+print("\nTable Groups:")
+print(f"  - group1_basic: {len(config_data_group1)} tables")
+print(f"  - group2_advanced: {len(config_data_group2)} tables")
 print("\n" + "=" * 80)
-

@@ -8,7 +8,8 @@ This notebook:
 3. Checks for existing jobs
 4. Creates jobs using Databricks SDK
 
-CRITICAL: Job naming convention is validation_<table_group> (strict!)
+CRITICAL: Job naming convention is {JOB_NAME_PREFIX}_{table_group}
+         Configure JOB_NAME_PREFIX in deltarecon.config.constants
 
 PREREQUISITE: Edit 03_configure_jobs.py first to configure your jobs!
 """

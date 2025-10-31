@@ -49,3 +49,6 @@ QUERY_TIMEOUT_SECONDS = 300  # 5 minutes timeout for queries
 VALIDATION_USER_NAME = "lightweight_deltarecon"
 VALIDATION_USER_EMAIL = "kushagra.parashar@databricks.com"
 
+# Job naming configuration
+JOB_NAME_PREFIX = "validation_job"  # Prefix for job names. Final format: {JOB_NAME_PREFIX}_{table_group}
+

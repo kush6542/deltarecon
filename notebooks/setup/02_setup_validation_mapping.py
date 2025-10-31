@@ -26,7 +26,7 @@ MERGE INTO {constants.VALIDATION_MAPPING_TABLE} AS target
 USING (
   SELECT
     group_name as table_group,
-    concat('validation_', group_name) as workflow_name,
+    concat('{constants.JOB_NAME_PREFIX}_', group_name) as workflow_name,
     concat_ws('_', target_catalog, target_schema, target_table) as table_family,
     concat_ws('.', 'source_system', source_schema, source_table) as src_table,
     concat_ws('.', target_catalog, target_schema, target_table) as tgt_table,

@@ -166,26 +166,34 @@ GLOBAL_JOB_SETTINGS = {
 
 # DBTITLE 1,Job Name Template
 """
-Job naming convention: validation_<table_group>
+Job naming convention: {JOB_NAME_PREFIX}_{table_group}
+
+The job name prefix is configurable via JOB_NAME_PREFIX constant in deltarecon.config.constants.
+Default: "validation"
+
+Example: If JOB_NAME_PREFIX = "validation" and table_group = "sales",
+         the job name will be: "validation_sales"
 
 Note: Jobs are identified by TAGS, not by name prefix.
-You can change this naming pattern if needed - the framework
-will still identify jobs via tags:
+You can change the naming pattern by updating JOB_NAME_PREFIX in constants.py.
+The framework will still identify jobs via tags:
   - managed_by = "deltarecon"
   - table_group = "<group_name>"
 """
+
+# Import job name prefix from constants
+from deltarecon.config.constants import JOB_NAME_PREFIX
 
 def get_job_name(table_group: str) -> str:
     """
     Get job name for a table group
     
-    You can customize this function to use different naming patterns.
-    Example alternatives:
-    - f"lvf_{table_group}"
-    - f"dmv_validation_{table_group}"
-    - f"{table_group}_validation_job"
+    Format: {JOB_NAME_PREFIX}_{table_group}
+    
+    The prefix is configurable via JOB_NAME_PREFIX in deltarecon.config.constants.
+    Change it there to customize all job names at once.
     """
-    return f"validation_{table_group}"
+    return f"{JOB_NAME_PREFIX}_{table_group}"
 
 # COMMAND ----------
 

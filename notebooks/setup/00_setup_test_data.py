@@ -464,6 +464,13 @@ print(f"❌ Created {table_name} - Composite PK will FAIL (source has duplicate 
 table_name = "group2_partitioned"
 batch_id = "TEST_20250101_170000"
 
+# Ensure we're in the correct catalog/schema context
+spark.sql(f"USE CATALOG {target_catalog}")
+spark.sql(f"USE SCHEMA {target_schema}")
+
+# Drop table if it exists to ensure clean state
+spark.sql(f"DROP TABLE IF EXISTS {target_catalog}.{target_schema}.{table_name}")
+
 source_schema_partitioned = StructType([
     StructField("id", IntegerType(), False),
     StructField("name", StringType(), True),
@@ -483,7 +490,25 @@ orc_path = f"{orc_base_path}/{table_name}/{batch_id}/data.orc"
 source_df.write.mode("overwrite").format("orc").save(orc_path)
 
 target_df = source_df.withColumn("_aud_batch_load_id", lit(batch_id))
-target_df.write.mode("overwrite").format("delta").partitionBy("date_partition").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
+
+# Create table with explicit DDL to ensure proper schema and partitioning
+create_table_ddl = f"""
+CREATE TABLE {target_catalog}.{target_schema}.{table_name} (
+    id INT NOT NULL,
+    name STRING,
+    amount INT,
+    price DOUBLE,
+    date_partition DATE,
+    _aud_batch_load_id STRING
+)
+USING DELTA
+PARTITIONED BY (date_partition)
+"""
+
+spark.sql(create_table_ddl)
+
+# Insert data into the table
+target_df.write.mode("append").format("delta").saveAsTable(f"{target_catalog}.{target_schema}.{table_name}")
 
 print(f"✅ Created {table_name} - Partitioned table (date_partition)")
 

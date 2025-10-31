@@ -1,0 +1,95 @@
+"""
+Structured logger for validation framework
+
+Provides:
+- Consistent log formatting
+- Validation-specific logging methods
+- Section headers for readability
+"""
+
+import logging
+from typing import Any, Dict
+
+
+class ValidationLogger:
+    """Structured logger with validation-specific methods"""
+    
+    def __init__(self, name: str):
+        self.logger = logging.getLogger(name)
+        self.logger.setLevel(logging.INFO)
+        
+        # Clear existing handlers to avoid duplicates
+        self.logger.handlers = []
+        
+        # Format: timestamp [level] [component] - message
+        formatter = logging.Formatter(
+            '%(asctime)s.%(msecs)03d [%(levelname)s] [%(name)s] - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        self.logger.addHandler(handler)
+    
+    def info(self, message: str):
+        """Log info level message"""
+        self.logger.info(message)
+    
+    def warning(self, message: str):
+        """Log warning level message"""
+        self.logger.warning(message)
+    
+    def error(self, message: str, exc_info: bool = False):
+        """Log error level message"""
+        self.logger.error(message, exc_info=exc_info)
+    
+    def debug(self, message: str):
+        """Log debug level message"""
+        self.logger.debug(message)
+    
+    def log_section(self, title: str, width: int = 80):
+        """Log a major section header"""
+        self.logger.info(f"[SECTION] {title}")
+    
+    def log_subsection(self, title: str, width: int = 80):
+        """Log a subsection header"""
+        self.logger.info(f"[SUBSECTION] {title}")
+    
+    def log_validation_start(self, table_name: str, batch_ids: list):
+        """Log validation start for a table"""
+        self.logger.info(
+            f"Starting validation for table: {table_name}, "
+            f"batches: {batch_ids}"
+        )
+    
+    def log_validation_complete(self, table_name: str, status: str, duration: float):
+        """Log validation completion for a table"""
+        self.logger.info(
+            f"Completed validation for table: {table_name}, "
+            f"status: {status}, duration: {duration:.2f}s"
+        )
+    
+    def log_metrics(self, metrics: Dict[str, Any]):
+        """Log metrics in structured format"""
+        self.logger.info(f"Metrics: {metrics}")
+    
+    def log_error_with_context(self, error: Exception, context: Dict[str, Any]):
+        """Log error with contextual information for debugging"""
+        self.logger.error(
+            f"Error occurred: {str(error)}, Context: {context}",
+            exc_info=True
+        )
+
+
+def get_logger(name: str) -> ValidationLogger:
+    """
+    Get logger instance
+    
+    Args:
+        name: Logger name (typically __name__ from calling module)
+    
+    Returns:
+        ValidationLogger instance
+    """
+    return ValidationLogger(name)
+

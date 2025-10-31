@@ -29,6 +29,7 @@ from deltarecon.core.validation_engine import ValidationEngine
 from deltarecon.core.metadata_writer import MetadataWriter
 from deltarecon.models.table_config import TableConfig
 from deltarecon.models.validation_result import ValidationLogRecord, ValidationSummaryRecord
+from deltarecon.utils.banner import print_banner
 from deltarecon.utils.logger import get_logger
 from deltarecon.utils.exceptions import ValidationFrameworkException
 
@@ -124,26 +125,7 @@ class ValidationRunner:
         """
         try:
             # Print ASCII art banner
-            ascii_banner = """
-╔═════════════════════════════════════════════════════════════╗
-║                                                             ║
-║   ██████╗ ███████╗██╗  ████████╗ █████╗                   ║
-║   ██╔══██╗██╔════╝██║  ╚══██╔══╝██╔══██╗                  ║
-║   ██║  ██║█████╗  ██║     ██║   ███████║                  ║
-║   ██║  ██║██╔══╝  ██║     ██║   ██╔══██║                  ║
-║   ██████╔╝███████╗███████╗██║   ██║  ██║                  ║
-║   ╚═════╝ ╚══════╝╚══════╝╚═╝   ╚═╝  ╚═╝                  ║
-║                                                             ║
-║   ██████╗ ███████╗ ██████╗ ██████╗ ███╗   ██╗             ║
-║   ██╔══██╗██╔════╝██╔════╝██╔═══██╗████╗  ██║             ║
-║   ██████╔╝█████╗  ██║     ██║   ██║██╔██╗ ██║             ║
-║   ██╔══██╗██╔══╝  ██║     ██║   ██║██║╚██╗██║             ║
-║   ██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚████║             ║
-║   ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝             ║
-║                                                             ║
-╚═════════════════════════════════════════════════════════════╝
-"""
-            print(ascii_banner)
+            print_banner()
             
             # Log start
             self.logger.log_section("DELTARECON - Starting")

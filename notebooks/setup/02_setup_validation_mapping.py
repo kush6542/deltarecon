@@ -11,11 +11,16 @@ MERGE logic ensures idempotency.
 # COMMAND ----------
 
 # DBTITLE 1,Load Constants
+import importlib
 from deltarecon.config import constants
+
+# Reload constants to ensure latest changes are picked up
+importlib.reload(constants)
 
 # COMMAND ----------
 
 print(f"Framework Version: {constants.FRAMEWORK_VERSION}")
+print(f"Job Name Prefix: {constants.JOB_NAME_PREFIX}")
 print(f"Syncing validation_mapping from ingestion_config...")
 
 # COMMAND ----------

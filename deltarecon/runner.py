@@ -18,7 +18,7 @@ Usage:
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pyspark.sql import SparkSession
 
 from deltarecon.config import constants
@@ -197,14 +197,27 @@ class ValidationRunner:
         """
         table_name = table_config.table_name
         
+        # CRITICAL: Initialize MetadataWriter BEFORE try block so it's always available
+        # for error logging, even if other components fail during initialization.
+        # This is architecturally sound: initialize observability/logging components first.
+        # If MetadataWriter initialization fails, that's a fatal error - we cannot proceed
+        # without the ability to log metadata.
+        try:
+            metadata_writer = MetadataWriter(self.spark)
+        except Exception as init_error:
+            # MetadataWriter is critical - if it fails, we cannot proceed safely
+            self.logger.error(f"FATAL: Failed to initialize MetadataWriter: {init_error}")
+            raise ValidationFrameworkException(
+                f"Cannot proceed without MetadataWriter: {init_error}"
+            ) from init_error
+        
         try:
             self.logger.log_section(f"Processing Table: {table_name}")
             
-            # Initialize components (create fresh instances for thread safety)
+            # Initialize other components (create fresh instances for thread safety)
             batch_processor = BatchProcessor(self.spark)
             loader = SourceTargetLoader(self.spark)
-            validation_engine = ValidationEngine(self.spark)
-            metadata_writer = MetadataWriter(self.spark)
+            validation_engine = ValidationEngine()
             
             # Step 1: Identify unprocessed batches
             self.logger.info("Step 1: Identifying unprocessed batches...")
@@ -220,14 +233,14 @@ class ValidationRunner:
             
             # Step 3: Load source and target data
             self.logger.info("Step 3: Loading data...")
-            src_df, tgt_df = loader.load_data(table_config, batch_ids, orc_paths)
+            src_df, tgt_df = loader.load_source_and_target(table_config, batch_ids, orc_paths)
             
             # Step 4: Run validations
             self.logger.info("Step 4: Running validations...")
-            validation_result = validation_engine.validate(
-                table_config=table_config,
-                src_df=src_df,
-                tgt_df=tgt_df,
+            validation_result = validation_engine.run_validations(
+                source_df=src_df,
+                target_df=tgt_df,
+                config=table_config,
                 batch_ids=batch_ids,
                 iteration_name=self.iteration_name
             )
@@ -258,7 +271,7 @@ class ValidationRunner:
             return self._handle_table_error(table_config, e, metadata_writer)
     
     def _handle_no_batches(
-        self,
+        self,   
         table_config: TableConfig,
         metadata_writer: MetadataWriter
     ) -> Dict[str, Any]:
@@ -295,7 +308,7 @@ class ValidationRunner:
         self.logger.error(f"Table FAILED: {table_name} - {str(error)}")
         self.logger.error(str(error), exc_info=True)
         
-        # Try to write error to log
+        # Write error to log (metadata_writer is guaranteed to be initialized)
         try:
             log_record = self._create_log_record(table_config, [], "FAILED")
             log_record.end_time = datetime.now()

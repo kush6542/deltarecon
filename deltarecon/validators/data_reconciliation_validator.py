@@ -100,8 +100,8 @@ class DataReconciliationValidator(BaseValidator):
         # matches: Rows that exist in both (identical)
         matches = src_total - src_extras
         
-        # mismatches: Not applicable for full-row hash (can't track "same entity")
-        mismatches = "NA"
+        # mismatches: Not applicable for full-row hash (can't track "same entity, different data")
+        mismatches = 0
         
         # Clean up
         source_hashed.unpersist()
@@ -127,10 +127,10 @@ class DataReconciliationValidator(BaseValidator):
                 "src_extras": src_extras,
                 "tgt_extras": tgt_extras,
                 "matches": matches,
-                "mismatches": mismatches,
+                "mismatches": mismatches, 
                 "reconciliation_type": "full_row"
             },
-            message=f"src_extras={src_extras}, tgt_extras={tgt_extras}, matches={matches}"
+            message=f"src_extras={src_extras}, tgt_extras={tgt_extras}, matches={matches}, mismatches={mismatches}"
         )
         
         self.log_result(result)

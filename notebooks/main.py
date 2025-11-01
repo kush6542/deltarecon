@@ -22,9 +22,20 @@ spark = SparkSession.builder.getOrCreate()
 # DBTITLE 1,Get Parameters
 dbutils.widgets.text("table_group", "")
 dbutils.widgets.text("iteration_suffix", "default")
+dbutils.widgets.text("isFullValidation", "false")
 
 table_group = dbutils.widgets.get("table_group")
 iteration_suffix = dbutils.widgets.get("iteration_suffix")
+
+# Parse isFullValidation parameter
+is_full_validation_str = dbutils.widgets.get("isFullValidation").strip().lower()
+if is_full_validation_str in ["true", "false"]:
+    is_full_validation = (is_full_validation_str == "true")
+else:
+    print(f"WARNING: Invalid parameter value for isFullValidation: '{is_full_validation_str}'. Valid values are 'true' or 'false'. Proceeding with False.")
+    is_full_validation = False
+
+print(f"Full Validation Mode: {'ENABLED' if is_full_validation else 'DISABLED'}")
 
 # COMMAND ----------
 
@@ -33,7 +44,8 @@ iteration_suffix = dbutils.widgets.get("iteration_suffix")
 runner = ValidationRunner(
     spark=spark,
     table_group=table_group,
-    iteration_suffix=iteration_suffix
+    iteration_suffix=iteration_suffix,
+    is_full_validation=is_full_validation
 )
 
 # Run validation - all orchestration happens inside the runner

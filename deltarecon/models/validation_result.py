@@ -9,7 +9,7 @@ Contains:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from datetime import datetime
 
 
@@ -99,7 +99,7 @@ class ValidationSummaryRecord:
     tgt_records: int
     src_extras: Optional[int] = None
     tgt_extras: Optional[int] = None
-    mismatches: Optional[int] = None
+    mismatches: Optional[Union[int, str]] = None  # Can be int (legacy) or "NA" string
     matches: Optional[int] = None
     
     # Additional metadata
@@ -136,6 +136,20 @@ class ValidationSummaryRecord:
         pk_result = validation_result.validator_results.get('pk_validation')
         pk_status = pk_result.status if pk_result else 'SKIPPED'
         
+        # Extract reconciliation metrics (only if full validation ran)
+        recon_result = validation_result.validator_results.get('data_reconciliation')
+        if recon_result and recon_result.status != 'SKIPPED':
+            src_extras = recon_result.metrics.get('src_extras')
+            tgt_extras = recon_result.metrics.get('tgt_extras')
+            matches = recon_result.metrics.get('matches')
+            mismatches = recon_result.metrics.get('mismatches')
+        else:
+            # Full validation not run - set to NULL
+            src_extras = None
+            tgt_extras = None
+            matches = None
+            mismatches = None
+        
         return cls(
             iteration_name=validation_result.iteration_name,
             workflow_name=workflow_name,
@@ -151,6 +165,10 @@ class ValidationSummaryRecord:
             overall_status=validation_result.overall_status,
             src_records=src_records,
             tgt_records=tgt_records,
+            src_extras=src_extras,
+            tgt_extras=tgt_extras,
+            mismatches=mismatches,
+            matches=matches,
             spot_check_sample_size=validation_result.spot_check_result.get('sample_size') if validation_result.spot_check_result else None,
             spot_check_mismatches=validation_result.spot_check_result.get('mismatches') if validation_result.spot_check_result else None
         )

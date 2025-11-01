@@ -51,7 +51,9 @@ class RowCountValidator(BaseValidator):
         
         if not match:
             diff = abs(src_count - tgt_count)
-            pct_diff = (diff / max(src_count, tgt_count)) * 100
+            # Prevent division by zero if both counts are 0
+            denominator = max(src_count, tgt_count)
+            pct_diff = (diff / denominator * 100) if denominator > 0 else 0
             logger.warning(
                 f"Row count mismatch: {diff:,} rows difference ({pct_diff:.2f}%)"
             )

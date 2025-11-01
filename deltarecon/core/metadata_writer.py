@@ -167,14 +167,26 @@ class MetadataWriter:
         
         try:
             # Build metrics struct
+            # CRITICAL: Use 'is None' check instead of 'or' to preserve 0 values
+            src_extras_val = 'NULL' if summary_record.src_extras is None else summary_record.src_extras
+            tgt_extras_val = 'NULL' if summary_record.tgt_extras is None else summary_record.tgt_extras
+            # Handle mismatches: can be None, int, or "NA" string
+            if summary_record.mismatches is None:
+                mismatches_val = 'NULL'
+            elif isinstance(summary_record.mismatches, str):
+                mismatches_val = f"'{summary_record.mismatches}'"  # Quote string values
+            else:
+                mismatches_val = summary_record.mismatches
+            matches_val = 'NULL' if summary_record.matches is None else summary_record.matches
+            
             metrics_struct = f"""
                 named_struct(
                     'src_records', {summary_record.src_records},
                     'tgt_records', {summary_record.tgt_records},
-                    'src_extras', {summary_record.src_extras or 'NULL'},
-                    'tgt_extras', {summary_record.tgt_extras or 'NULL'},
-                    'mismatches', {summary_record.mismatches or 'NULL'},
-                    'matches', {summary_record.matches or 'NULL'}
+                    'src_extras', {src_extras_val},
+                    'tgt_extras', {tgt_extras_val},
+                    'mismatches', {mismatches_val},
+                    'matches', {matches_val}
                 )
             """
             

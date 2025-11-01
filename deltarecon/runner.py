@@ -66,7 +66,8 @@ class ValidationRunner:
         self,
         spark: SparkSession,
         table_group: str,
-        iteration_suffix: str = "default"
+        iteration_suffix: str = "default",
+        is_full_validation: bool = False
     ):
         """
         Initialize the ValidationRunner.
@@ -75,6 +76,7 @@ class ValidationRunner:
             spark: SparkSession instance
             table_group: Name of the table group to validate (required)
             iteration_suffix: Suffix for iteration name (default: "default")
+            is_full_validation: Enable full data reconciliation (default: False)
         
         Raises:
             ValueError: If table_group is empty
@@ -85,12 +87,19 @@ class ValidationRunner:
         self.spark = spark
         self.table_group = table_group
         self.iteration_suffix = iteration_suffix
+        self.is_full_validation = is_full_validation
         
         # Generate unique iteration name
         self.iteration_name = f"{iteration_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         # Initialize logger
         self.logger = get_logger(__name__)
+        
+        # Log configuration
+        self.logger.info("ValidationRunner initialized")
+        self.logger.info(f"  Table Group: {table_group}")
+        self.logger.info(f"  Iteration: {self.iteration_name}")
+        self.logger.info(f"  Full Validation: {is_full_validation}")
         
         # Components (initialized on demand)
         self._config_reader = None
@@ -221,7 +230,7 @@ class ValidationRunner:
             # Initialize other components (create fresh instances for thread safety)
             batch_processor = BatchProcessor(self.spark)
             loader = SourceTargetLoader(self.spark)
-            validation_engine = ValidationEngine()
+            validation_engine = ValidationEngine(is_full_validation=self.is_full_validation)
             
             # Set table context for all operations
             self.logger.set_table_context(table_name)

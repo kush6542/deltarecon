@@ -181,11 +181,12 @@ class ValidationRunner:
         
         This method handles the complete validation workflow for one table:
         1. Identify unprocessed batches
-        2. Write log entry (IN_PROGRESS)
-        3. Load source and target data
-        4. Run validations
-        5. Write validation summary
-        6. Update log entry (COMPLETE)
+        2. For each batch (batch-level auditing):
+           a. Write log entry (IN_PROGRESS)
+           b. Load source and target data for that batch
+           c. Run validations
+           d. Write validation summary
+           e. Update log entry (COMPLETE)
         
         Args:
             table_config: Configuration for the table to validate
@@ -195,7 +196,9 @@ class ValidationRunner:
                 {
                     "table": str,
                     "status": str,  # "SUCCESS", "FAILED", or "NO_NEW_BATCHES"
-                    "batches": int,
+                    "batches_processed": int,
+                    "batches_succeeded": int,
+                    "batches_failed": int,
                     "error": str (optional)
                 }
         """
@@ -203,9 +206,6 @@ class ValidationRunner:
         
         # CRITICAL: Initialize MetadataWriter BEFORE try block so it's always available
         # for error logging, even if other components fail during initialization.
-        # This is architecturally sound: initialize observability/logging components first.
-        # If MetadataWriter initialization fails, that's a fatal error - we cannot proceed
-        # without the ability to log metadata.
         try:
             metadata_writer = MetadataWriter(self.spark)
         except Exception as init_error:
@@ -226,55 +226,102 @@ class ValidationRunner:
             # Set table context for all operations
             self.logger.set_table_context(table_name)
             
-            # Step 1: Identify unprocessed batches
+            # Step 1: Identify unprocessed batches with batch-to-path mapping
             self.logger.info("Step 1: Identifying unprocessed batches...")
-            batch_ids, orc_paths = batch_processor.get_unprocessed_batches(table_config)
+            batch_mapping = batch_processor.get_unprocessed_batches_with_mapping(table_config)
             
-            if not batch_ids:
+            if not batch_mapping:
                 result = self._handle_no_batches(table_config, metadata_writer)
                 self.logger.clear_table_context()
                 return result
             
-            # Step 2: Write log entry (IN_PROGRESS)
-            self.logger.info("Step 2: Writing log entry...")
-            log_record = self._create_log_record(table_config, batch_ids, "IN_PROGRESS")
-            metadata_writer.write_log_start(log_record)
+            # Step 2: Process each batch separately (BATCH-LEVEL AUDITING)
+            total_batches = len(batch_mapping)
+            batches_succeeded = 0
+            batches_failed = 0
             
-            # Step 3: Load source and target data
-            self.logger.info("Step 3: Loading data...")
-            src_df, tgt_df = loader.load_source_and_target(table_config, batch_ids, orc_paths)
+            self.logger.info(f"Processing {total_batches} batch(es) individually (batch-level auditing)")
             
-            # Step 4: Run validations
-            self.logger.info("Step 4: Running validations...")
-            validation_result = validation_engine.run_validations(
-                source_df=src_df,
-                target_df=tgt_df,
-                config=table_config,
-                batch_ids=batch_ids,
-                iteration_name=self.iteration_name
-            )
+            for batch_id, orc_paths in batch_mapping.items():
+                try:
+                    self.logger.log_section(f"BATCH: {batch_id}")
+                    
+                    # Step 2a: Write log entry (IN_PROGRESS) for this batch
+                    self.logger.info(f"Step 2a: Writing log entry for batch {batch_id}...")
+                    log_record = self._create_log_record(table_config, batch_id, "IN_PROGRESS")
+                    metadata_writer.write_log_start(log_record)
+                    
+                    # Step 2b: Load source and target data for this batch only
+                    self.logger.info(f"Step 2b: Loading data for batch {batch_id}...")
+                    src_df, tgt_df = loader.load_source_and_target(table_config, batch_id, orc_paths)
+                    
+                    # Step 2c: Run validations for this batch
+                    self.logger.info(f"Step 2c: Running validations for batch {batch_id}...")
+                    validation_result = validation_engine.run_validations(
+                        source_df=src_df,
+                        target_df=tgt_df,
+                        config=table_config,
+                        batch_id=batch_id,
+                        iteration_name=self.iteration_name
+                    )
+                    
+                    # Step 2d: Write validation summary for this batch
+                    self.logger.info(f"Step 2d: Writing validation summary for batch {batch_id}...")
+                    summary_record = ValidationSummaryRecord.from_validation_result(
+                        validation_result=validation_result,
+                        table_config=table_config,
+                        workflow_name=f"validation_{table_config.table_group}"
+                    )
+                    metadata_writer.write_summary(summary_record)
+                    
+                    # Step 2e: Update log entry (COMPLETE) for this batch
+                    log_record.status = validation_result.overall_status
+                    log_record.end_time = datetime.now()
+                    metadata_writer.write_log_complete(log_record)
+                    
+                    if validation_result.overall_status == "SUCCESS":
+                        batches_succeeded += 1
+                        self.logger.info(f"Batch {batch_id} completed: SUCCESS")
+                    else:
+                        batches_failed += 1
+                        self.logger.warning(f"Batch {batch_id} completed: FAILED")
+                    
+                except Exception as batch_error:
+                    batches_failed += 1
+                    self.logger.error(f"Batch {batch_id} FAILED with error: {str(batch_error)}")
+                    
+                    # Write error to log for this specific batch
+                    try:
+                        error_log_record = self._create_log_record(table_config, batch_id, "FAILED")
+                        error_log_record.end_time = datetime.now()
+                        error_log_record.exception = str(batch_error)[:1000]
+                        metadata_writer.write_log_complete(error_log_record)
+                    except Exception as log_error:
+                        self.logger.error(f"Failed to write error log for batch {batch_id}: {str(log_error)}")
+                    
+                    # Continue to next batch (don't fail entire table)
+                    continue
             
-            # Step 5: Write validation summary
-            self.logger.info("Step 5: Writing validation summary...")
-            summary_record = ValidationSummaryRecord.from_validation_result(
-                validation_result=validation_result,
-                table_config=table_config,
-                workflow_name=f"validation_{table_config.table_group}"
-            )
-            metadata_writer.write_summary(summary_record)
+            # Determine overall table status
+            if batches_failed == 0:
+                overall_status = "SUCCESS"
+            elif batches_succeeded == 0:
+                overall_status = "FAILED"
+            else:
+                overall_status = "PARTIAL_SUCCESS"
             
-            # Step 6: Update log entry (COMPLETE)
-            log_record.status = validation_result.overall_status
-            log_record.end_time = datetime.now()
-            metadata_writer.write_log_complete(log_record)
-            
-            self.logger.info(f"Table completed - Status: {validation_result.overall_status}")
+            self.logger.info(f"Table completed - Status: {overall_status}")
+            self.logger.info(f"  Total batches: {total_batches}")
+            self.logger.info(f"  Succeeded: {batches_succeeded}")
+            self.logger.info(f"  Failed: {batches_failed}")
             self.logger.clear_table_context()
             
             return {
                 "table": table_name,
-                "status": validation_result.overall_status,
-                "batches": len(batch_ids)
+                "status": overall_status,
+                "batches_processed": total_batches,
+                "batches_succeeded": batches_succeeded,
+                "batches_failed": batches_failed
             }
             
         except Exception as e:
@@ -288,25 +335,15 @@ class ValidationRunner:
     ) -> Dict[str, Any]:
         """Handle case when there are no new batches to validate."""
         self.logger.set_table_context(table_config.table_name)
-        self.logger.info("No new batches to validate - writing log entry")
-        
-        # Write log entry for "no new batches"
-        log_record = self._create_log_record(
-            table_config,
-            batch_ids=[],
-            status="SUCCESS"
-        )
-        log_record.end_time = datetime.now()
-        log_record.exception = "No new batches to validate"
-        
-        metadata_writer.write_log_start(log_record)
-        metadata_writer.write_log_complete(log_record)
+        self.logger.info("No new batches to validate")
         
         self.logger.clear_table_context()
         return {
             "table": table_config.table_name,
             "status": "NO_NEW_BATCHES",
-            "batches": 0
+            "batches_processed": 0,
+            "batches_succeeded": 0,
+            "batches_failed": 0
         }
     
     def _handle_table_error(
@@ -322,38 +359,30 @@ class ValidationRunner:
         self.logger.error(f"Table FAILED - Error: {str(error)}")
         self.logger.error(str(error), exc_info=True)
         
-        # Write error to log (metadata_writer is guaranteed to be initialized)
-        try:
-            log_record = self._create_log_record(table_config, [], "FAILED")
-            log_record.end_time = datetime.now()
-            log_record.exception = str(error)[:1000]  # Limit exception length
-            metadata_writer.write_log_complete(log_record)
-        except Exception as log_error:
-            self.logger.error("Failed to write error to log")
-            self.logger.error(str(log_error), exc_info=True)
-        
         self.logger.clear_table_context()
         return {
             "table": table_name,
             "status": "FAILED",
-            "batches": 0,
+            "batches_processed": 0,
+            "batches_succeeded": 0,
+            "batches_failed": 0,
             "error": str(error)
         }
     
     def _create_log_record(
         self,
         table_config: TableConfig,
-        batch_ids: List[str],
+        batch_id: str,
         status: str
     ) -> ValidationLogRecord:
-        """Create a ValidationLogRecord for a table."""
+        """Create a ValidationLogRecord for a single batch."""
         return ValidationLogRecord(
             iteration_name=self.iteration_name,
             workflow_name=f"validation_{table_config.table_group}",
             table_family=table_config.table_family,
             src_table=table_config.source_table,
             tgt_table=table_config.table_name,
-            batch_load_ids=batch_ids,
+            batch_load_id=batch_id,
             status=status,
             start_time=datetime.now()
         )

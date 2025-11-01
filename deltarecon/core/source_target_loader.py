@@ -41,16 +41,16 @@ class SourceTargetLoader:
     def load_source_and_target(
         self,
         config: TableConfig,
-        batch_ids: List[str],
+        batch_id: str,
         orc_paths: List[str]
     ) -> Tuple[DataFrame, DataFrame]:
         """
-        Load source ORC and target Delta data
+        Load source ORC and target Delta data for a single batch
         
         Args:
             config: Table configuration
-            batch_ids: Batch IDs to validate
-            orc_paths: ORC file paths for these batches
+            batch_id: Batch ID to validate (single batch for batch-level auditing)
+            orc_paths: ORC file paths for this batch
         
         Returns:
             Tuple of (source_df, target_df)
@@ -60,18 +60,17 @@ class SourceTargetLoader:
             DataConsistencyError: If verification fails
         """
         self.logger.set_table_context(config.table_name)
-        self.logger.info(f"Loading data")
-        self.logger.info(f"  Batches: {batch_ids}")
+        self.logger.info(f"Loading data for batch: {batch_id}")
         self.logger.info(f"  ORC files: {len(orc_paths)}")
         
         # Load source
         source_df = self._load_source_orc(orc_paths, config)
         
         # Load target
-        target_df = self._load_target_delta(config.table_name, batch_ids)
+        target_df = self._load_target_delta(config.table_name, batch_id)
         
         # Verify batch IDs match
-        self._verify_batch_consistency(source_df, target_df, batch_ids, config.table_name)
+        self._verify_batch_consistency(source_df, target_df, batch_id, config.table_name)
         
         self.logger.clear_table_context()
         return source_df, target_df
@@ -196,13 +195,13 @@ class SourceTargetLoader:
         
         return result_df
     
-    def _load_target_delta(self, table_name: str, batch_ids: List[str]) -> DataFrame:
+    def _load_target_delta(self, table_name: str, batch_id: str) -> DataFrame:
         """
-        Load target Delta table with batch filtering
+        Load target Delta table with batch filtering for a single batch
         
         Args:
             table_name: Fully qualified table name
-            batch_ids: Batch IDs to filter
+            batch_id: Batch ID to filter (single batch)
         
         Returns:
             Filtered DataFrame
@@ -216,11 +215,10 @@ class SourceTargetLoader:
             # Read Delta table
             df = self.spark.table(table_name)
             
-            # Apply batch filter
-            batch_filter = " OR ".join([f"_aud_batch_load_id = '{bid}'" for bid in batch_ids])
-            self.logger.info(f"  Applying filter: {batch_filter}")
+            # Apply batch filter for single batch
+            self.logger.info(f"  Applying filter: _aud_batch_load_id = '{batch_id}'")
             
-            df_filtered = df.filter(batch_filter)
+            df_filtered = df.filter(f"_aud_batch_load_id = '{batch_id}'")
             
             target_count = df_filtered.count()
             self.logger.info(f"  Target data: {target_count:,} rows")
@@ -237,44 +235,58 @@ class SourceTargetLoader:
         self,
         source_df: DataFrame,
         target_df: DataFrame,
-        expected_batches: List[str],
+        expected_batch: str,
         table_name: str
     ):
         """
-        Verify target Delta has only expected batches
+        Verify target Delta has only the expected batch
         
-        CRITICAL: Ensures filter worked correctly.
+        CRITICAL: Ensures filter worked correctly for single batch.
         
         Args:
             source_df: Source DataFrame
             target_df: Target DataFrame
-            expected_batches: Expected batch IDs
+            expected_batch: Expected batch ID (single batch)
             table_name: Table name for logging
         
         Raises:
-            DataConsistencyError: If batches don't match
+            DataConsistencyError: If batch doesn't match
         """
         try:
-            # Verify target batches
+            # Verify target batch
             target_batches = target_df.select("_aud_batch_load_id").distinct().collect()
             actual_batches = [row['_aud_batch_load_id'] for row in target_batches]
             
-            expected_set = set(expected_batches)
-            actual_set = set(actual_batches)
-            
-            if expected_set != actual_set:
+            if len(actual_batches) == 0:
                 error_msg = (
-                    f"Target batch mismatch for {table_name}! "
-                    f"Expected: {expected_set}, Got: {actual_set}. "
+                    f"Target has no data for batch {expected_batch} in {table_name}! "
                     f"Filter not working correctly."
                 )
                 self.logger.error(error_msg)
                 raise DataConsistencyError(error_msg)
             
-            self.logger.info("  Target batch verification passed")
+            if len(actual_batches) > 1:
+                error_msg = (
+                    f"Target has multiple batches for {table_name}! "
+                    f"Expected: {expected_batch}, Got: {actual_batches}. "
+                    f"Filter not working correctly."
+                )
+                self.logger.error(error_msg)
+                raise DataConsistencyError(error_msg)
+            
+            if actual_batches[0] != expected_batch:
+                error_msg = (
+                    f"Target batch mismatch for {table_name}! "
+                    f"Expected: {expected_batch}, Got: {actual_batches[0]}. "
+                    f"Filter not working correctly."
+                )
+                self.logger.error(error_msg)
+                raise DataConsistencyError(error_msg)
+            
+            self.logger.info(f"  Target batch verification passed: {expected_batch}")
             
         except DataConsistencyError:
             raise
         except Exception as e:
-            self.logger.warning(f"Could not verify target batches (non-critical): {str(e)}")
+            self.logger.warning(f"Could not verify target batch (non-critical): {str(e)}")
 

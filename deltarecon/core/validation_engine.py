@@ -43,7 +43,7 @@ class ValidationEngine:
         source_df: DataFrame,
         target_df: DataFrame,
         config: TableConfig,
-        batch_ids: list,
+        batch_id: str,
         iteration_name: str
     ) -> ValidationResult:
         """
@@ -53,7 +53,7 @@ class ValidationEngine:
             source_df: Source DataFrame
             target_df: Target DataFrame
             config: Table configuration
-            batch_ids: Batch IDs being validated
+            batch_id: Batch ID being validated (single batch)
             iteration_name: Current iteration name
         
         Returns:
@@ -63,7 +63,7 @@ class ValidationEngine:
         
         self.logger.set_table_context(config.table_name)
         self.logger.log_section(f"VALIDATION RUN: {config.table_name}")
-        self.logger.info(f"Batches: {batch_ids}")
+        self.logger.info(f"Batch: {batch_id}")
         self.logger.info(f"Iteration: {iteration_name}")
         
         # Log DataFrame details
@@ -123,7 +123,7 @@ class ValidationEngine:
         validation_result = ValidationResult(
             table_name=config.table_name,
             table_family=config.table_family,
-            batch_load_ids=batch_ids,
+            batch_load_id=batch_id,
             iteration_name=iteration_name,
             overall_status=overall_status,
             validator_results=validator_results,

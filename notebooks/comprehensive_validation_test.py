@@ -32,7 +32,7 @@ print("COMPREHENSIVE DELTARECON VALIDATION FRAMEWORK TEST")
 print("=" * 80)
 print(f"Framework Version: {constants.FRAMEWORK_VERSION}")
 print(f"Ingestion Catalog: {constants.INGESTION_OPS_CATALOG}")
-print(f"Validation Catalog: {constants.VALIDATION_CATALOG}")
+print(f"Validation Catalog: {constants.VALIDATION_OPS_CATALOG}")
 print("=" * 80)
 
 # COMMAND ----------
@@ -1216,7 +1216,7 @@ print("\nValidation mapping details for this test:")
 print(f"  • Table Group: {TEST_GROUP}")
 print(f"  • Workflow Name: {WORKFLOW_NAME}")
 print(f"  • Total Tables: {len(all_configs)}")
-print(f"  • Catalog: {constants.VALIDATION_CATALOG}")
+print(f"  • Catalog: {constants.VALIDATION_OPS_CATALOG}")
 print(f"  • Schema: {constants.VALIDATION_SCHEMA}")
 print(f"  • Mapping Table: {constants.VALIDATION_MAPPING_TABLE}")
 

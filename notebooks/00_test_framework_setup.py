@@ -20,6 +20,7 @@ After running this notebook, you can:
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DecimalType, TimestampType, LongType
 from pyspark.sql.functions import current_timestamp, lit
 from datetime import datetime, timedelta
+from decimal import Decimal
 import random
 
 # Import framework constants
@@ -101,11 +102,11 @@ print("✓ Schemas defined")
 print(f"Generating products data for {BATCH_1}...")
 
 products_batch1_data = [
-    (1, 'Laptop Pro 15', 'Electronics', 1299.99, 50, BATCH_1),
-    (2, 'Wireless Mouse', 'Electronics', 29.99, 200, BATCH_1),
-    (3, 'Office Desk', 'Furniture', 349.99, 30, BATCH_1),
-    (4, 'Coffee Maker', 'Appliances', 89.99, 75, BATCH_1),
-    (5, 'Notebook Set', 'Stationery', 12.99, 150, BATCH_1),
+    (1, 'Laptop Pro 15', 'Electronics', Decimal('1299.99'), 50, BATCH_1),
+    (2, 'Wireless Mouse', 'Electronics', Decimal('29.99'), 200, BATCH_1),
+    (3, 'Office Desk', 'Furniture', Decimal('349.99'), 30, BATCH_1),
+    (4, 'Coffee Maker', 'Appliances', Decimal('89.99'), 75, BATCH_1),
+    (5, 'Notebook Set', 'Stationery', Decimal('12.99'), 150, BATCH_1),
 ]
 
 products_batch1_df = spark.createDataFrame(products_batch1_data, products_schema)
@@ -118,11 +119,11 @@ display(products_batch1_df)
 print(f"Generating products data for {BATCH_2}...")
 
 products_batch2_data = [
-    (6, 'USB-C Cable', 'Electronics', 19.99, 300, BATCH_2),
-    (7, 'Standing Desk', 'Furniture', 499.99, 20, BATCH_2),
-    (8, 'Water Bottle', 'Accessories', 24.99, 100, BATCH_2),
-    (9, 'Monitor 27"', 'Electronics', 349.99, 40, BATCH_2),
-    (10, 'Desk Lamp', 'Furniture', 45.99, 80, BATCH_2),
+    (6, 'USB-C Cable', 'Electronics', Decimal('19.99'), 300, BATCH_2),
+    (7, 'Standing Desk', 'Furniture', Decimal('499.99'), 20, BATCH_2),
+    (8, 'Water Bottle', 'Accessories', Decimal('24.99'), 100, BATCH_2),
+    (9, 'Monitor 27"', 'Electronics', Decimal('349.99'), 40, BATCH_2),
+    (10, 'Desk Lamp', 'Furniture', Decimal('45.99'), 80, BATCH_2),
 ]
 
 products_batch2_df = spark.createDataFrame(products_batch2_data, products_schema)

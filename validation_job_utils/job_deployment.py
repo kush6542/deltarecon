@@ -230,15 +230,22 @@ def create_job(job_name: str, job_attribs: Dict[str, Any], dry_run: bool = False
         print(f"  [DRY RUN] Would create/update job: {job_name}")
         return None
     
-    jb = Job.from_dict(job_attribs)
     job_id = check_if_job_exists(job_name)
     if job_id:
         print(f"  Job already exists with job_id:{job_id}, updating...")
+        jb = Job.from_dict(job_attribs)
         w.jobs.reset(new_settings=jb, job_id=job_id)
     else:
         print(f"  Creating new job: {job_name}")
-        jb = w.jobs.create(**jb.as_shallow_dict())
-        job_id = jb.job_id
+        jb = Job.from_dict(job_attribs)
+        try:
+            # Try as_shallow_dict() for newer SDK versions
+            created_job = w.jobs.create(**jb.as_shallow_dict())
+            job_id = created_job.job_id
+        except AttributeError:
+            # Fallback for older SDK versions
+            created_job = w.jobs.create(**job_attribs)
+            job_id = created_job.job_id
     return job_id
 
 # COMMAND ----------

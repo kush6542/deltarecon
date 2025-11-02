@@ -161,7 +161,9 @@ def get_cluster(cluster_name: str,
                 driver_instance_pool_id: str, 
                 min_workers: int, max_workers: int,
                 custom_tags: Dict[str, str] = None,
-                spark_conf: Dict[str, str] = None
+                spark_conf: Dict[str, str] = None,
+                node_type_id: str = None,
+                driver_node_type_id: str = None
                 ):
     cluster = cluster_template.replace("{cluster_name}", cluster_name)
     cluster = cluster.replace("{policy_id}", policy_id)
@@ -169,20 +171,29 @@ def get_cluster(cluster_name: str,
     cluster = cluster.replace("{max_workers}", str(max_workers))
     d_cluster = eval(cluster)
     
-    # Conditionally add instance pools only if provided in YAML config
-    # Leave these commented in YAML if your policy already defines instance pools
-    # Uncomment in YAML only if policy does NOT define them
-    if instance_pool_id and str(instance_pool_id).strip():
+    # Priority 1: Use node_type_id if defined (more explicit)
+    # Priority 2: Use instance_pool_id if defined
+    # Priority 3: Let policy define compute
+    
+    if node_type_id and str(node_type_id).strip():
+        # Use node type (takes priority)
+        d_cluster["new_cluster"]["node_type_id"] = node_type_id
+        print(f"  Using node_type_id: {node_type_id}")
+    elif instance_pool_id and str(instance_pool_id).strip():
+        # Use instance pool as fallback
         d_cluster["new_cluster"]["instance_pool_id"] = instance_pool_id
         print(f"  Using instance_pool_id: {instance_pool_id}")
-    # else:
-    #     print(f"  instance_pool_id not specified - using policy default")
+    # else: policy defines compute
     
-    if driver_instance_pool_id and str(driver_instance_pool_id).strip():
+    if driver_node_type_id and str(driver_node_type_id).strip():
+        # Use driver node type (takes priority)
+        d_cluster["new_cluster"]["driver_node_type_id"] = driver_node_type_id
+        print(f"  Using driver_node_type_id: {driver_node_type_id}")
+    elif driver_instance_pool_id and str(driver_instance_pool_id).strip():
+        # Use driver instance pool as fallback
         d_cluster["new_cluster"]["driver_instance_pool_id"] = driver_instance_pool_id
         print(f"  Using driver_instance_pool_id: {driver_instance_pool_id}")
-    # else:
-    #     print(f"  driver_instance_pool_id not specified - using policy default")
+    # else: policy defines compute
     
     if custom_tags:
         d_cluster["new_cluster"]["custom_tags"] = custom_tags
@@ -264,6 +275,8 @@ def create_job_from_config(job_name, job_config, dry_run=False):
     job_parameters = elem_config.get('job_parameters')
     driver_instance_pool_id = elem_config.get('driver_instance_pool_id')
     instance_pool_id = elem_config.get('instance_pool_id')
+    node_type_id = elem_config.get('node_type_id')
+    driver_node_type_id = elem_config.get('driver_node_type_id')
     policy_id = elem_config.get('policy_id')
     min_workers = elem_config.get('min_workers', 2)
     max_workers = elem_config.get('max_workers', 5)
@@ -274,7 +287,9 @@ def create_job_from_config(job_name, job_config, dry_run=False):
     if not isinstance(cluster_tags, dict):
         print("warning: cluster_tags cant be applied since not in `Dict[str,str] format, kindly modify the yml file.")
         cluster_tags = {}
-    d_cluster = get_cluster(cluster_name, instance_pool_id, policy_id, driver_instance_pool_id, min_workers, max_workers, cluster_tags, spark_conf)
+    d_cluster = get_cluster(cluster_name, instance_pool_id, policy_id, driver_instance_pool_id, 
+                           min_workers, max_workers, cluster_tags, spark_conf,
+                           node_type_id, driver_node_type_id)
     d_task = get_task(job_name, cluster_name, notebook_path, job_parameters)
     l_job_params = get_job_parameters(job_parameters)
     email_notify = elem_config.get('email_notification_list', "")

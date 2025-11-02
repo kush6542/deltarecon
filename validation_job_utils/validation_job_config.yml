@@ -5,14 +5,16 @@
 # REQUIRED: Cluster Policy ID
 policy_id: '001900960C882452'
 
-# OPTIONAL: Instance Pool Configuration
-# - If your policy already defines instance pools: LEAVE THESE COMMENTED
-# - If your policy does NOT define instance pools: UNCOMMENT these lines
-# - If commented: These will NOT be applied to job clusters
-# - If uncommented: These WILL be applied to job clusters
-# -----------------------------------------------------------------------------
-driver_instance_pool_id: '1102-051010-guppy41-pool-b9my9uhr'
-instance_pool_id: '1102-051010-guppy41-pool-b9my9uhr'
+# Compute Configuration
+
+# Option 1: Comment out instance pools 
+# driver_instance_pool_id: '1102-051010-guppy41-pool-b9my9uhr'
+# instance_pool_id: '1102-051010-guppy41-pool-b9my9uhr'
+
+# Option 2: Use node types (for Azure - Standard_DS3_v2 is common)
+# UNCOMMENT these and update with your preferred Azure VM size:
+node_type_id: 'Standard_DS3_v2'
+driver_node_type_id: 'Standard_DS3_v2'
 # -----------------------------------------------------------------------------
 spn_id: '10d005a0-a140-4a75-b984-21dafab30664'
 min_workers: 2

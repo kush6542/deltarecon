@@ -1,13 +1,19 @@
-# Global job settings
-# -----------------------------------------------------------------------------
-# Instance Pool Configuration:
-# - If your policy_id DEFINES instance pools: LEAVE THESE COMMENTED
-# - If your policy_id DOES NOT define instance pools: UNCOMMENT these lines
-# - To check your policy: Use the verification methods in job_deployment notebook
-# -----------------------------------------------------------------------------
-# driver_instance_pool_id: '1102-051010-guppy41-pool-b9my9uhr'
-# instance_pool_id: '1102-051010-guppy41-pool-b9my9uhr'
+# ==============================================================================
+# Global Job Settings
+# ==============================================================================
+
+# REQUIRED: Cluster Policy ID
 policy_id: '001900960C882452'
+
+# OPTIONAL: Instance Pool Configuration
+# - If your policy already defines instance pools: LEAVE THESE COMMENTED
+# - If your policy does NOT define instance pools: UNCOMMENT these lines
+# - If commented: These will NOT be applied to job clusters
+# - If uncommented: These WILL be applied to job clusters
+# -----------------------------------------------------------------------------
+driver_instance_pool_id: '1102-051010-guppy41-pool-b9my9uhr'
+instance_pool_id: '1102-051010-guppy41-pool-b9my9uhr'
+# -----------------------------------------------------------------------------
 spn_id: '10d005a0-a140-4a75-b984-21dafab30664'
 min_workers: 2
 max_workers: 4

@@ -5,14 +5,14 @@
 
 # COMMAND ----------
 
-# %pip install --upgrade databricks-sdk==0.49.0
-# %restart_python
+%pip install --upgrade databricks-sdk==0.49.0
+%restart_python
 
 # COMMAND ----------
 
 # DBTITLE 1,Widgets
 dbutils.widgets.text("config_file_path","")
-dbutils.widgets.dropdown("dry_run","N",["Y","N"])
+dbutils.widgets.dropdown("dry_run","Y",["Y","N"])
 
 # COMMAND ----------
 
@@ -329,7 +329,8 @@ def create_job_from_config(job_name, job_config, dry_run=False):
             "op": "GREATER_THAN",
             "value": warning_threshold_seconds
         })
-        d_job["email_notifications"]["on_duration_warning_threshold_exceeded"] = l_email_notify
+        if l_email_notify:
+            d_job["email_notifications"]["on_duration_warning_threshold_exceeded"] = l_email_notify
     if max_concurrent_runs:
         d_job["max_concurrent_runs"] = max_concurrent_runs
     if tags:

@@ -5,8 +5,8 @@
 
 # COMMAND ----------
 
-%pip install --upgrade databricks-sdk==0.49.0
-%restart_python
+# %pip install --upgrade databricks-sdk==0.49.0
+# %restart_python
 
 # COMMAND ----------
 

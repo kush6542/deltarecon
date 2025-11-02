@@ -50,18 +50,3 @@ runner = ValidationRunner(
 
 # Run validation - all orchestration happens inside the runner
 result = runner.run()
-
-# COMMAND ----------
-
-# DBTITLE 1,Display Summary
-print("VALIDATION COMPLETE")
-print(f"Total tables: {result['total']}")
-print(f"Success: {result['success']}")
-print(f"Failed: {result['failed']}")
-print(f"No new batches: {result['no_batches']}")
-
-# Exit with appropriate status
-if result['failed'] > 0:
-    print(f"\n{result['failed']} table(s) failed validation")
-else:
-    print("\nAll validations passed!")

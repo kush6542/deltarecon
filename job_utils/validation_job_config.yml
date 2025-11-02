@@ -3,7 +3,7 @@
 # ==============================================================================
 
 # REQUIRED: Cluster Policy ID
-policy_id: '001900960C882452'
+policy_id: ''
 
 # Compute Configuration
 
@@ -13,12 +13,13 @@ policy_id: '001900960C882452'
 
 # Option 2: Use node types (for Azure - Standard_DS3_v2 is common)
 # UNCOMMENT these and update with your preferred Azure VM size:
-node_type_id: 'Standard_DS3_v2'
-driver_node_type_id: 'Standard_DS3_v2'
+node_type_id: 'Standard_D8s_v3'
+driver_node_type_id: 'Standard_D8s_v3'
 # -----------------------------------------------------------------------------
-spn_id: '10d005a0-a140-4a75-b984-21dafab30664'
+
+spn_id: ''
 min_workers: 2
-max_workers: 4
+max_workers: 8
 cluster_tags:
   managed_by: validation_framework
   purpose: data_validation
@@ -28,26 +29,27 @@ timeout_seconds: 7200
 warning_threshold_seconds: 3600
 permissions:
   can_manage: group:admins
-  can_manage_run: user:kushagra.parashar@databricks.com
+  can_manage_run: user:fname.lname@company.com
   can_view: group:analysts
 
 
 # Individual job configs
 jobs:
-  - job_name: validation_comprehensive_test_group
-    notebook_path: '/Workspace/Users/kushagra.parashar@databricks.com/deltarecon/notebooks/main'
+  - job_name: validation_job_<table_group_name>
+    notebook_path: '/Workspace/Users/user.name@company.com/deltarecon/notebooks/main' # Replace with path to main.py
     schedule: null
     job_parameters:
-      table_group: comprehensive_test_group
-      iteration_suffix: test
-      isFullValidation: "false" # True does hash based recon, expensive !
+      # The job parameters are MANDATORY for the job to run
+      table_group: <table_group_name>
+      iteration_suffix: <suffix_name> # e.g. daily, hourly, etc.
+      isFullValidation: "false" # True does hash based reconciliation, expensive !
     min_workers: 2
-    max_workers: 4
+    max_workers: 8
     spark_conf:
       spark.sql.adaptive.enabled: "true"
       spark.driver.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
       spark.executor.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
-    email_notification_list: kushagra.parashar@databricks.com
+    email_notification_list: fname.lname@company.com
     timeout_seconds: 1800
     warning_threshold_seconds: 1200
     max_concurrent_runs: 1
@@ -55,17 +57,18 @@ jobs:
     pause_schedule: false
     tags:
       managed_by: validation_framework
-      table_group: comprehensive_test_group
-      validation_type: basic
-      environment: test
+      table_group: comprehensive_test_group #group name from config/table_groups.yml
+      validation_type: basic # basic or full
+      environment: test # test or prod
 
-  - job_name: validation_group2_advanced
+  - job_name: validation_job_<table_group_name>
     notebook_path: '/Workspace/Users/your-email@example.com/deltarecon/notebooks/main'
     schedule: "0 0 2 * * ?"
     job_parameters:
-      table_group: group2_advanced
+      # The job parameters are MANDATORY for the job to run
+      table_group: <table_group_name>
       iteration_suffix: daily
-      isFullValidation: "true" # True does hash based recon, expensive !
+      isFullValidation: "false" # True does hash based recon, expensive !
     min_workers: 4
     max_workers: 8
     spark_conf:
@@ -74,7 +77,7 @@ jobs:
       spark.sql.shuffle.partitions: "200"
       spark.driver.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
       spark.executor.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
-    email_notification_list: kushagra.parashar@databricks.com
+    email_notification_list: fname.lname@company.com
     timeout_seconds: 3600
     warning_threshold_seconds: 2400
     max_concurrent_runs: 1
@@ -82,10 +85,10 @@ jobs:
     pause_schedule: false
     tags:
       managed_by: validation_framework
-      table_group: group2_advanced
+      table_group: <table_group_name>
       validation_type: comprehensive
-      environment: test
+      environment: test # test or prod
     permissions:
       can_manage: group:admins
-      can_manage_run: user:kushagra.parashar@databricks.com
+      can_manage_run: user:fname.lname@company.com
       can_view: group:analysts

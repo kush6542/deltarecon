@@ -74,7 +74,7 @@ jobs:
       spark.sql.shuffle.partitions: "200"
       spark.driver.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
       spark.executor.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
-    email_notification_list: your-email@example.com, team@example.com
+    email_notification_list: kushagra.parashar@databricks.com
     timeout_seconds: 3600
     warning_threshold_seconds: 2400
     max_concurrent_runs: 1
@@ -87,5 +87,5 @@ jobs:
       environment: test
     permissions:
       can_manage: group:admins
-      can_manage_run: user:your-email@example.com, user:teammate@example.com
+      can_manage_run: user:kushagra.parashar@databricks.com
       can_view: group:analysts

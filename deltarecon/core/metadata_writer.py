@@ -170,13 +170,8 @@ class MetadataWriter:
             # CRITICAL: Use 'is None' check instead of 'or' to preserve 0 values
             src_extras_val = 'NULL' if summary_record.src_extras is None else summary_record.src_extras
             tgt_extras_val = 'NULL' if summary_record.tgt_extras is None else summary_record.tgt_extras
-            # Handle mismatches: can be None, int, or "NA" string
-            if summary_record.mismatches is None:
-                mismatches_val = 'NULL'
-            elif isinstance(summary_record.mismatches, str):
-                mismatches_val = f"'{summary_record.mismatches}'"  # Quote string values
-            else:
-                mismatches_val = summary_record.mismatches
+            # mismatches is always "NA" string
+            mismatches_val = f"'{summary_record.mismatches}'"
             matches_val = 'NULL' if summary_record.matches is None else summary_record.matches
             
             metrics_struct = f"""
@@ -201,6 +196,7 @@ class MetadataWriter:
                     '{summary_record.primary_key_compliance_status}',
                     '{summary_record.col_name_compare_status}',
                     '{summary_record.data_type_compare_status}',
+                    '{summary_record.data_reconciliation_status}',
                     '{summary_record.overall_status}',
                     {metrics_struct},
                     '{summary_record.iteration_name}',

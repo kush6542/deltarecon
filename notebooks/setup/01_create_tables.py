@@ -78,13 +78,14 @@ CREATE TABLE IF NOT EXISTS {constants.VALIDATION_SUMMARY_TABLE} (
   primary_key_compliance_status STRING COMMENT 'PK validation status: PASSED, FAILED, SKIPPED',
   col_name_compare_status STRING COMMENT 'Column name comparison status: PASSED, FAILED, SKIPPED',
   data_type_compare_status STRING COMMENT 'Data type comparison status: PASSED, FAILED, SKIPPED',
+  data_reconciliation_status STRING COMMENT 'Data reconciliation status: PASSED, FAILED, SKIPPED',
   overall_status STRING COMMENT 'Overall validation status: SUCCESS, FAILED',
   metrics STRUCT<
     src_records: BIGINT,
     tgt_records: BIGINT,
     src_extras: BIGINT,
     tgt_extras: BIGINT,
-    mismatches: BIGINT,
+    mismatches: STRING,
     matches: BIGINT
   > COMMENT 'Validation metrics',
   iteration_name STRING COMMENT 'Iteration name',

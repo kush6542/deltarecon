@@ -48,15 +48,24 @@ class SchemaValidator(BaseValidator):
         
         self.log_start()
         
-        # Get schemas (excluding audit columns from target)
-        source_schema = {f.name: f.dataType for f in source_df.schema.fields}
+        # Get schemas
+        # CRITICAL: Exclude both audit columns AND partition columns from comparison
+        # Partition columns are added during source extraction and don't exist in original source
+        partition_cols_to_exclude = set(config.partition_columns) if config.is_partitioned else set()
+        
+        source_schema = {
+            f.name: f.dataType 
+            for f in source_df.schema.fields 
+            if f.name not in partition_cols_to_exclude  # Exclude extracted partition columns
+        }
+        
         target_schema = {
             f.name: f.dataType 
             for f in target_df.schema.fields 
             if not f.name.startswith('_aud_')  # Exclude audit columns
         }
         
-        logger.info(f"Source columns: {len(source_schema)}")
+        logger.info(f"Source columns: {len(source_schema)} (excluding {len(partition_cols_to_exclude)} partition columns)")
         logger.info(f"Target columns: {len(target_schema)} (excluding _aud_* columns)")
         
         issues = []

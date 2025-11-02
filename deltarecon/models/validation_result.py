@@ -9,7 +9,7 @@ Contains:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from datetime import datetime
 
 
@@ -37,7 +37,7 @@ class ValidationResult:
     
     table_name: str
     table_family: str
-    batch_load_ids: List[str]
+    batch_load_id: str  # Single batch ID for batch-level auditing
     iteration_name: str
     overall_status: str  # SUCCESS if all PASSED, else FAILED
     validator_results: Dict[str, ValidatorResult]  # {validator_name: result}
@@ -56,7 +56,7 @@ class ValidationLogRecord:
     """
     Record for validation_log table
     
-    Tracks each validation run at table level.
+    Tracks each validation run at batch level.
     """
     
     iteration_name: str
@@ -64,7 +64,7 @@ class ValidationLogRecord:
     table_family: str
     src_table: str  # Source table name
     tgt_table: str  # Target table name
-    batch_load_ids: List[str]
+    batch_load_id: str  # Single batch ID for batch-level auditing
     status: str  # IN_PROGRESS, SUCCESS, FAILED
     start_time: datetime
     end_time: Optional[datetime] = None
@@ -84,7 +84,7 @@ class ValidationSummaryRecord:
     table_family: str
     src_table: str
     tgt_table: str
-    batch_load_ids: List[str]
+    batch_load_id: str  # Single batch ID for batch-level auditing
     
     # Status fields (one per check type)
     row_count_match_status: str
@@ -92,6 +92,7 @@ class ValidationSummaryRecord:
     primary_key_compliance_status: str
     col_name_compare_status: str
     data_type_compare_status: str
+    data_reconciliation_status: str
     overall_status: str
     
     # Metrics
@@ -99,7 +100,7 @@ class ValidationSummaryRecord:
     tgt_records: int
     src_extras: Optional[int] = None
     tgt_extras: Optional[int] = None
-    mismatches: Optional[int] = None
+    mismatches: str = "NA"  # Always "NA" - deprecated field for backward compatibility
     matches: Optional[int] = None
     
     # Additional metadata
@@ -136,21 +137,40 @@ class ValidationSummaryRecord:
         pk_result = validation_result.validator_results.get('pk_validation')
         pk_status = pk_result.status if pk_result else 'SKIPPED'
         
+        # Extract reconciliation metrics (only if full validation ran)
+        recon_result = validation_result.validator_results.get('data_reconciliation')
+        if recon_result and recon_result.status != 'SKIPPED':
+            src_extras = recon_result.metrics.get('src_extras')
+            tgt_extras = recon_result.metrics.get('tgt_extras')
+            matches = recon_result.metrics.get('matches')
+            data_reconciliation_status = recon_result.status  # "PASSED" or "FAILED"
+        else:
+            # Full validation not run - set to NULL
+            src_extras = None
+            tgt_extras = None
+            matches = None
+            data_reconciliation_status = "SKIPPED"
+        
         return cls(
             iteration_name=validation_result.iteration_name,
             workflow_name=workflow_name,
             table_family=validation_result.table_family,
             src_table=table_config.source_table,
             tgt_table=table_config.table_name,
-            batch_load_ids=validation_result.batch_load_ids,
+            batch_load_id=validation_result.batch_load_id,
             row_count_match_status=row_count_status,
             schema_match_status=schema_status,
             primary_key_compliance_status=pk_status,
             col_name_compare_status=col_name_status,
             data_type_compare_status=data_type_status,
+            data_reconciliation_status=data_reconciliation_status,
             overall_status=validation_result.overall_status,
             src_records=src_records,
             tgt_records=tgt_records,
+            src_extras=src_extras,
+            tgt_extras=tgt_extras,
+            mismatches="NA",  # Always "NA" - deprecated field
+            matches=matches,
             spot_check_sample_size=validation_result.spot_check_result.get('sample_size') if validation_result.spot_check_result else None,
             spot_check_mismatches=validation_result.spot_check_result.get('mismatches') if validation_result.spot_check_result else None
         )

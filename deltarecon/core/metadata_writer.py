@@ -48,16 +48,17 @@ class MetadataWriter:
             MetadataWriteError: If write fails
         """
         self.logger.set_table_context(log_record.tgt_table)
-        self.logger.info(f"Writing log entry (start)")
+        self.logger.info(f"Writing log entry (start) for batch: {log_record.batch_load_id}")
         
         try:
-            # Check if entry already exists
+            # Check if entry already exists for this specific batch
             check_query = f"""
                 SELECT COUNT(*) as cnt
                 FROM {constants.VALIDATION_LOG_TABLE}
                 WHERE iteration_name = '{log_record.iteration_name}'
                   AND table_family = '{log_record.table_family}'
                   AND tgt_table = '{log_record.tgt_table}'
+                  AND batch_load_id = '{log_record.batch_load_id}'
             """
             
             existing_count = self.spark.sql(check_query).first()['cnt']
@@ -65,7 +66,7 @@ class MetadataWriter:
             if existing_count > 0:
                 self.logger.warning(
                     f"Log entry already exists for {log_record.tgt_table} "
-                    f"in iteration {log_record.iteration_name}. Updating (rerun)."
+                    f"batch {log_record.batch_load_id} in iteration {log_record.iteration_name}. Updating (rerun)."
                 )
                 
                 # Update existing entry
@@ -78,16 +79,15 @@ class MetadataWriter:
                     WHERE iteration_name = '{log_record.iteration_name}'
                       AND table_family = '{log_record.table_family}'
                       AND tgt_table = '{log_record.tgt_table}'
+                      AND batch_load_id = '{log_record.batch_load_id}'
                 """
                 self.spark.sql(update_query)
             else:
-                # Insert new entry
-                batch_ids_array = "array(" + ",".join([f"'{bid}'" for bid in log_record.batch_load_ids]) + ")"
-                
+                # Insert new entry - batch_load_id is now a simple string
                 insert_query = f"""
                     INSERT INTO {constants.VALIDATION_LOG_TABLE}
                     VALUES (
-                        {batch_ids_array},
+                        '{log_record.batch_load_id}',
                         '{log_record.src_table}',
                         '{log_record.tgt_table}',
                         'IN_PROGRESS',
@@ -121,7 +121,7 @@ class MetadataWriter:
             MetadataWriteError: If update fails
         """
         self.logger.set_table_context(log_record.tgt_table)
-        self.logger.info(f"Updating log entry (complete)")
+        self.logger.info(f"Updating log entry (complete) for batch: {log_record.batch_load_id}")
         
         try:
             # Escape single quotes in exception message for SQL (replace ' with '')
@@ -139,6 +139,7 @@ class MetadataWriter:
                 WHERE iteration_name = '{log_record.iteration_name}'
                   AND table_family = '{log_record.table_family}'
                   AND tgt_table = '{log_record.tgt_table}'
+                  AND batch_load_id = '{log_record.batch_load_id}'
             """
             
             self.spark.sql(update_query)
@@ -162,27 +163,32 @@ class MetadataWriter:
             MetadataWriteError: If write fails
         """
         self.logger.set_table_context(summary_record.tgt_table)
-        self.logger.info(f"Writing summary")
+        self.logger.info(f"Writing summary for batch: {summary_record.batch_load_id}")
         
         try:
-            batch_ids_array = "array(" + ",".join([f"'{bid}'" for bid in summary_record.batch_load_ids]) + ")"
-            
             # Build metrics struct
+            # CRITICAL: Use 'is None' check instead of 'or' to preserve 0 values
+            src_extras_val = 'NULL' if summary_record.src_extras is None else summary_record.src_extras
+            tgt_extras_val = 'NULL' if summary_record.tgt_extras is None else summary_record.tgt_extras
+            # mismatches is always "NA" string
+            mismatches_val = f"'{summary_record.mismatches}'"
+            matches_val = 'NULL' if summary_record.matches is None else summary_record.matches
+            
             metrics_struct = f"""
                 named_struct(
                     'src_records', {summary_record.src_records},
                     'tgt_records', {summary_record.tgt_records},
-                    'src_extras', {summary_record.src_extras or 'NULL'},
-                    'tgt_extras', {summary_record.tgt_extras or 'NULL'},
-                    'mismatches', {summary_record.mismatches or 'NULL'},
-                    'matches', {summary_record.matches or 'NULL'}
+                    'src_extras', {src_extras_val},
+                    'tgt_extras', {tgt_extras_val},
+                    'mismatches', {mismatches_val},
+                    'matches', {matches_val}
                 )
             """
             
             insert_query = f"""
                 INSERT INTO {constants.VALIDATION_SUMMARY_TABLE}
                 VALUES (
-                    {batch_ids_array},
+                    '{summary_record.batch_load_id}',
                     '{summary_record.src_table}',
                     '{summary_record.tgt_table}',
                     '{summary_record.row_count_match_status}',
@@ -190,6 +196,7 @@ class MetadataWriter:
                     '{summary_record.primary_key_compliance_status}',
                     '{summary_record.col_name_compare_status}',
                     '{summary_record.data_type_compare_status}',
+                    '{summary_record.data_reconciliation_status}',
                     '{summary_record.overall_status}',
                     {metrics_struct},
                     '{summary_record.iteration_name}',

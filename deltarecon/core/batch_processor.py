@@ -5,11 +5,12 @@ Logic:
 - For append mode: Process all unvalidated COMPLETED batches
 - For overwrite mode: Process only latest COMPLETED batch
 - Skip batches that are already validated successfully
+- Supports batch-level auditing: returns batch-to-path mapping
 
 Note: Loaded via %run - constants, TableConfig, exceptions, logger available in namespace
 """
 
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from pyspark.sql import SparkSession
 
 from deltarecon.config import constants
@@ -71,13 +72,7 @@ class BatchProcessor:
                         batch_load_id,
                         validation_run_status,
                         row_number() OVER(PARTITION BY batch_load_id ORDER BY validation_run_start_time DESC) as rnk
-                    FROM (
-                        SELECT 
-                            explode(batch_load_id) as batch_load_id,
-                            validation_run_status,
-                            validation_run_start_time
-                        FROM {constants.VALIDATION_LOG_TABLE}
-                    )
+                    FROM {constants.VALIDATION_LOG_TABLE}
                 ) t3
                     ON t3.batch_load_id = t2.batch_load_id AND t3.rnk = 1
                 WHERE t2.status = 'COMPLETED'
@@ -176,4 +171,96 @@ class BatchProcessor:
             self.logger.warning(
                 f"Could not verify batch mapping (non-critical): {str(e)}"
             )
+    
+    def get_unprocessed_batches_with_mapping(self, config: TableConfig) -> Dict[str, List[str]]:
+        """
+        Get batches that need validation with batch-to-path mapping
+        
+        This method is designed for batch-level auditing where each batch is validated separately.
+        
+        Args:
+            config: Table configuration
+        
+        Returns:
+            Dictionary mapping batch_id to list of ORC paths
+            Example: {'batch1': ['path1.orc', 'path2.orc'], 'batch2': ['path3.orc']}
+        
+        Raises:
+            BatchProcessingError: If batch query fails
+        """
+        self.logger.set_table_context(config.table_name)
+        self.logger.info(f"Identifying unprocessed batches with path mapping")
+        self.logger.info(f"  Write mode: {config.write_mode}")
+        
+        try:
+            # Same query as get_unprocessed_batches but we preserve the relationship
+            query = f"""
+                SELECT
+                    t1.source_file_path,
+                    t2.batch_load_id
+                FROM {constants.INGESTION_METADATA_TABLE} t1
+                INNER JOIN {constants.INGESTION_AUDIT_TABLE} t2
+                    ON (t1.table_name = t2.target_table_name 
+                        AND t1.batch_load_id = t2.batch_load_id)
+                INNER JOIN {constants.INGESTION_CONFIG_TABLE} t4
+                    ON t1.table_name = concat_ws('.', t4.target_catalog, t4.target_schema, t4.target_table)
+                    AND t2.group_name = t4.group_name
+                LEFT JOIN (
+                    SELECT 
+                        batch_load_id,
+                        validation_run_status,
+                        row_number() OVER(PARTITION BY batch_load_id ORDER BY validation_run_start_time DESC) as rnk
+                    FROM {constants.VALIDATION_LOG_TABLE}
+                ) t3
+                    ON t3.batch_load_id = t2.batch_load_id AND t3.rnk = 1
+                WHERE t2.status = 'COMPLETED'
+                    AND t1.table_name = '{config.table_name}'
+                    AND (
+                        -- For overwrite mode: only latest batch
+                        (t4.write_mode = 'overwrite' AND t2.batch_load_id = (
+                            SELECT max(batch_load_id)
+                            FROM {constants.INGESTION_AUDIT_TABLE}
+                            WHERE status = 'COMPLETED'
+                                AND target_table_name = '{config.table_name}'
+                        ))
+                        -- For append mode: all batches
+                        OR t4.write_mode <> 'overwrite'
+                    )
+                    AND (
+                        -- Batch not validated OR last validation was not SUCCESS
+                        (t3.validation_run_status <> 'SUCCESS' AND t3.rnk = 1)
+                        OR t3.batch_load_id IS NULL
+                    )
+            """
+            
+            result_df = self.spark.sql(query)
+            rows = result_df.collect()
+            
+            if not rows:
+                self.logger.info("No unprocessed batches found")
+                self.logger.clear_table_context()
+                return {}
+            
+            # Build batch-to-path mapping
+            batch_mapping = {}
+            for row in rows:
+                batch_id = row.batch_load_id
+                orc_path = row.source_file_path
+                
+                if batch_id not in batch_mapping:
+                    batch_mapping[batch_id] = []
+                batch_mapping[batch_id].append(orc_path)
+            
+            self.logger.info(f"Found {len(batch_mapping)} unprocessed batch(es): {list(batch_mapping.keys())}")
+            for batch_id, paths in batch_mapping.items():
+                self.logger.info(f"  {batch_id}: {len(paths)} ORC file(s)")
+            
+            self.logger.clear_table_context()
+            return batch_mapping
+            
+        except Exception as e:
+            self.logger.clear_table_context()
+            error_msg = f"Failed to get unprocessed batches with mapping for {config.table_name}: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            raise BatchProcessingError(error_msg)
 

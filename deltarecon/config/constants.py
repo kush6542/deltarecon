@@ -38,6 +38,9 @@ PARALLELISM = 5  # Number of tables to process in parallel per job
 SPOT_CHECK_SAMPLE_SIZE = 100  # Number of rows for random spot check
 FRAMEWORK_VERSION = "v1.0.0"
 
+# Batch-level auditing configuration
+BATCH_LEVEL_AUDITING = True  # If True, validates each batch individually; If False, validates all batches together
+
 # Retry configuration (for future use)
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 10

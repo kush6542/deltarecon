@@ -27,15 +27,37 @@ class ValidationEngine:
     Runs validators in sequence and aggregates results.
     """
     
-    def __init__(self):
+    def __init__(self, is_full_validation: bool = False):
         """
-        Initialize validation engine with all validators
+        Initialize validation engine with validators
+        
+        Args:
+            is_full_validation: If True, includes DataReconciliationValidator
+                               If False, runs only basic validators (default)
         """
+        # Core validators (always run)
         self.validators = [
             RowCountValidator(),
             SchemaValidator(),
             PKValidator()
         ]
+        
+        # Optional: Full data reconciliation
+        if is_full_validation:
+            try:
+                from deltarecon.validators.data_reconciliation_validator import DataReconciliationValidator
+                self.validators.append(DataReconciliationValidator())
+                logger.info("Full validation enabled - DataReconciliationValidator included")
+                logger.warning(
+                    "WARNING: Full validation mode is enabled. Hash-based data reconciliation "
+                    "may be slower for large datasets. Set isFullValidation=false for quick validation."
+                )
+            except ImportError as import_error:
+                logger.error(f"Failed to import DataReconciliationValidator: {import_error}")
+                logger.warning("Proceeding with quick validation mode (reconciliation disabled)")
+        else:
+            logger.info("Quick validation mode - DataReconciliationValidator skipped")
+        
         self.logger = logger
     
     def run_validations(
@@ -43,7 +65,7 @@ class ValidationEngine:
         source_df: DataFrame,
         target_df: DataFrame,
         config: TableConfig,
-        batch_ids: list,
+        batch_id: str,
         iteration_name: str
     ) -> ValidationResult:
         """
@@ -53,7 +75,7 @@ class ValidationEngine:
             source_df: Source DataFrame
             target_df: Target DataFrame
             config: Table configuration
-            batch_ids: Batch IDs being validated
+            batch_id: Batch ID being validated (single batch)
             iteration_name: Current iteration name
         
         Returns:
@@ -63,10 +85,15 @@ class ValidationEngine:
         
         self.logger.set_table_context(config.table_name)
         self.logger.log_section(f"VALIDATION RUN: {config.table_name}")
-        self.logger.info(f"Batches: {batch_ids}")
+        self.logger.info(f"Batch: {batch_id}")
         self.logger.info(f"Iteration: {iteration_name}")
         
-        # Log DataFrame details
+        # CRITICAL: Cache DataFrames FIRST to ensure all validators see the same snapshot
+        self.logger.info("Caching DataFrames for consistency...")
+        source_df.cache()
+        target_df.cache()
+        
+        # Now count and log (forces materialization of cache)
         self.logger.info(f"Source DataFrame:")
         self.logger.info(f"  Rows: {source_df.count():,}")
         self.logger.info(f"  Columns: {len(source_df.columns)}")
@@ -75,46 +102,43 @@ class ValidationEngine:
         self.logger.info(f"  Rows: {target_df.count():,}")
         self.logger.info(f"  Columns: {len(target_df.columns)}")
         
-        # Cache DataFrames for consistent reads across validators
-        self.logger.info("Caching DataFrames for consistency...")
-        source_df.cache()
-        target_df.cache()
-        
         # Run all validators
         validator_results = {}
         
         # Import validator logger to set table context
         from deltarecon.validators.base_validator import logger as validator_logger
         
-        for validator in self.validators:
-            try:
-                # Set table context for validator logger
-                validator_logger.set_table_context(config.table_name)
-                
-                validator_start = time.time()
-                result = validator.validate(source_df, target_df, config)
-                validator_duration = time.time() - validator_start
-                
-                validator_results[validator.name] = result
-                
-                self.logger.info(f"Validator '{validator.name}' completed in {validator_duration:.2f}s")
-                
-            except Exception as e:
-                self.logger.error(f"Validator '{validator.name}' FAILED: {str(e)}", exc_info=True)
-                
-                # Store error result
-                validator_results[validator.name] = ValidatorResult(
-                    status="ERROR",
-                    metrics={},
-                    message=str(e)
-                )
-            finally:
-                # Clear table context after each validator
-                validator_logger.clear_table_context()
-        
-        # Unpersist DataFrames
-        source_df.unpersist()
-        target_df.unpersist()
+        try:
+            for validator in self.validators:
+                try:
+                    # Set table context for validator logger
+                    validator_logger.set_table_context(config.table_name)
+                    
+                    validator_start = time.time()
+                    result = validator.validate(source_df, target_df, config)
+                    validator_duration = time.time() - validator_start
+                    
+                    validator_results[validator.name] = result
+                    
+                    self.logger.info(f"Validator '{validator.name}' completed in {validator_duration:.2f}s")
+                    
+                except Exception as e:
+                    self.logger.error(f"Validator '{validator.name}' FAILED: {str(e)}", exc_info=True)
+                    
+                    # Store error result
+                    validator_results[validator.name] = ValidatorResult(
+                        status="ERROR",
+                        metrics={},
+                        message=str(e)
+                    )
+                finally:
+                    # Clear table context after each validator
+                    validator_logger.clear_table_context()
+        finally:
+            # CRITICAL: Always unpersist DataFrames to prevent memory leaks
+            self.logger.info("Cleaning up cached DataFrames...")
+            source_df.unpersist()
+            target_df.unpersist()
         
         # Aggregate results
         end_time = datetime.now()
@@ -123,7 +147,7 @@ class ValidationEngine:
         validation_result = ValidationResult(
             table_name=config.table_name,
             table_family=config.table_family,
-            batch_load_ids=batch_ids,
+            batch_load_id=batch_id,
             iteration_name=iteration_name,
             overall_status=overall_status,
             validator_results=validator_results,

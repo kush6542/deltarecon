@@ -47,7 +47,7 @@ print(f"Created/verified: {constants.VALIDATION_MAPPING_TABLE}")
 # DBTITLE 1,Create validation_log Table
 validation_log_ddl = f"""
 CREATE TABLE IF NOT EXISTS {constants.VALIDATION_LOG_TABLE} (
-  batch_load_id ARRAY<STRING> COMMENT 'Array of batch IDs validated in this run',
+  batch_load_id STRING COMMENT 'Batch ID validated in this run',
   src_table STRING COMMENT 'Source table name',
   tgt_table STRING COMMENT 'Target table name',
   validation_run_status STRING COMMENT 'Run status: IN_PROGRESS, SUCCESS, FAILED',
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS {constants.VALIDATION_LOG_TABLE} (
   table_family STRING COMMENT 'Table family'
 )
 USING DELTA
-COMMENT 'Validation run audit log'
+COMMENT 'Validation run audit log - one record per batch'
 """
 
 spark.sql(validation_log_ddl)
@@ -70,7 +70,7 @@ print(f"Created/verified: {constants.VALIDATION_LOG_TABLE}")
 # DBTITLE 1,Create validation_summary Table
 validation_summary_ddl = f"""
 CREATE TABLE IF NOT EXISTS {constants.VALIDATION_SUMMARY_TABLE} (
-  batch_load_id ARRAY<STRING> COMMENT 'Array of batch IDs validated',
+  batch_load_id STRING COMMENT 'Batch ID validated',
   src_table STRING COMMENT 'Source table name',
   tgt_table STRING COMMENT 'Target table name',
   row_count_match_status STRING COMMENT 'Row count validation status: PASSED, FAILED, SKIPPED',
@@ -78,13 +78,14 @@ CREATE TABLE IF NOT EXISTS {constants.VALIDATION_SUMMARY_TABLE} (
   primary_key_compliance_status STRING COMMENT 'PK validation status: PASSED, FAILED, SKIPPED',
   col_name_compare_status STRING COMMENT 'Column name comparison status: PASSED, FAILED, SKIPPED',
   data_type_compare_status STRING COMMENT 'Data type comparison status: PASSED, FAILED, SKIPPED',
+  data_reconciliation_status STRING COMMENT 'Data reconciliation status: PASSED, FAILED, SKIPPED',
   overall_status STRING COMMENT 'Overall validation status: SUCCESS, FAILED',
   metrics STRUCT<
     src_records: BIGINT,
     tgt_records: BIGINT,
     src_extras: BIGINT,
     tgt_extras: BIGINT,
-    mismatches: BIGINT,
+    mismatches: STRING,
     matches: BIGINT
   > COMMENT 'Validation metrics',
   iteration_name STRING COMMENT 'Iteration name',
@@ -92,7 +93,7 @@ CREATE TABLE IF NOT EXISTS {constants.VALIDATION_SUMMARY_TABLE} (
   table_family STRING COMMENT 'Table family'
 )
 USING DELTA
-COMMENT 'Validation summary with metrics and check statuses'
+COMMENT 'Validation summary with metrics and check statuses - one record per batch'
 """
 
 spark.sql(validation_summary_ddl)

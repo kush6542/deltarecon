@@ -1,0 +1,91 @@
+# ==============================================================================
+# Global Job Settings
+# ==============================================================================
+
+# REQUIRED: Cluster Policy ID
+policy_id: '001900960C882452'
+
+# Compute Configuration
+
+# Option 1: Comment out instance pools 
+# driver_instance_pool_id: '1102-051010-guppy41-pool-b9my9uhr'
+# instance_pool_id: '1102-051010-guppy41-pool-b9my9uhr'
+
+# Option 2: Use node types (for Azure - Standard_DS3_v2 is common)
+# UNCOMMENT these and update with your preferred Azure VM size:
+node_type_id: 'Standard_DS3_v2'
+driver_node_type_id: 'Standard_DS3_v2'
+# -----------------------------------------------------------------------------
+spn_id: '10d005a0-a140-4a75-b984-21dafab30664'
+min_workers: 2
+max_workers: 4
+cluster_tags:
+  managed_by: validation_framework
+  purpose: data_validation
+job_tags:
+  managed_by: validation_framework
+timeout_seconds: 7200
+warning_threshold_seconds: 3600
+permissions:
+  can_manage: group:admins
+  can_manage_run: user:kushagra.parashar@databricks.com
+  can_view: group:analysts
+
+
+# Individual job configs
+jobs:
+  - job_name: validation_comprehensive_test_group
+    notebook_path: '/Workspace/Users/kushagra.parashar@databricks.com/deltarecon/notebooks/main'
+    schedule: null
+    job_parameters:
+      table_group: comprehensive_test_group
+      iteration_suffix: test
+      isFullValidation: "false" # True does hash based recon, expensive !
+    min_workers: 2
+    max_workers: 4
+    spark_conf:
+      spark.sql.adaptive.enabled: "true"
+      spark.driver.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
+      spark.executor.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
+    email_notification_list: kushagra.parashar@databricks.com
+    timeout_seconds: 1800
+    warning_threshold_seconds: 1200
+    max_concurrent_runs: 1
+    is_queue_enabled: false
+    pause_schedule: false
+    tags:
+      managed_by: validation_framework
+      table_group: comprehensive_test_group
+      validation_type: basic
+      environment: test
+
+  - job_name: validation_group2_advanced
+    notebook_path: '/Workspace/Users/your-email@example.com/deltarecon/notebooks/main'
+    schedule: "0 0 2 * * ?"
+    job_parameters:
+      table_group: group2_advanced
+      iteration_suffix: daily
+      isFullValidation: "true" # True does hash based recon, expensive !
+    min_workers: 4
+    max_workers: 8
+    spark_conf:
+      spark.sql.adaptive.enabled: "true"
+      spark.sql.adaptive.coalescePartitions.enabled: "true"
+      spark.sql.shuffle.partitions: "200"
+      spark.driver.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
+      spark.executor.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
+    email_notification_list: kushagra.parashar@databricks.com
+    timeout_seconds: 3600
+    warning_threshold_seconds: 2400
+    max_concurrent_runs: 1
+    is_queue_enabled: true
+    pause_schedule: false
+    tags:
+      managed_by: validation_framework
+      table_group: group2_advanced
+      validation_type: comprehensive
+      environment: test
+    permissions:
+      can_manage: group:admins
+      can_manage_run: user:kushagra.parashar@databricks.com
+      can_view: group:analysts

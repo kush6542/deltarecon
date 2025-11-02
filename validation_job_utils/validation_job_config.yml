@@ -1,0 +1,71 @@
+driver_instance_pool_id: 'your-driver-pool-id'
+instance_pool_id: 'your-worker-pool-id'
+policy_id: 'your-policy-id'
+spn_id: ''
+min_workers: 2
+max_workers: 5
+cluster_tags:
+  managed_by: validation_framework
+  framework: deltarecon
+  purpose: data_validation
+timeout_seconds: 7200
+warning_threshold_seconds: 3600
+permissions:
+  can_manage: group:admins
+  can_manage_run: user:your-email@example.com
+  can_view: group:analysts
+
+jobs:
+  - job_name: validation_group1_basic
+    notebook_path: '/Workspace/Users/your-email@example.com/deltarecon/notebooks/main'
+    schedule: null
+    job_parameters:
+      table_group: group1_basic
+      iteration_suffix: test
+      isFullValidation: "false"
+    min_workers: 2
+    max_workers: 4
+    spark_conf:
+      spark.sql.adaptive.enabled: "true"
+      spark.driver.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
+      spark.executor.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
+    email_notification_list: your-email@example.com
+    timeout_seconds: 1800
+    warning_threshold_seconds: 1200
+    max_concurrent_runs: 1
+    is_queue_enabled: false
+    pause_schedule: false
+    tags:
+      table_group: group1_basic
+      validation_type: basic
+      environment: test
+
+  - job_name: validation_group2_advanced
+    notebook_path: '/Workspace/Users/your-email@example.com/deltarecon/notebooks/main'
+    schedule: "0 0 2 * * ?"
+    job_parameters:
+      table_group: group2_advanced
+      iteration_suffix: daily
+      isFullValidation: "true"
+    min_workers: 4
+    max_workers: 8
+    spark_conf:
+      spark.sql.adaptive.enabled: "true"
+      spark.sql.adaptive.coalescePartitions.enabled: "true"
+      spark.sql.shuffle.partitions: "200"
+      spark.driver.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
+      spark.executor.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
+    email_notification_list: your-email@example.com, team@example.com
+    timeout_seconds: 3600
+    warning_threshold_seconds: 2400
+    max_concurrent_runs: 1
+    is_queue_enabled: true
+    pause_schedule: false
+    tags:
+      table_group: group2_advanced
+      validation_type: comprehensive
+      environment: test
+    permissions:
+      can_manage: group:admins
+      can_manage_run: user:your-email@example.com, user:teammate@example.com
+      can_view: group:analysts

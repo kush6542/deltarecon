@@ -6,7 +6,7 @@
 # COMMAND ----------
 
 # DBTITLE 1,Widgets
-dbutils.widgets.text("job_name_contains", "")
+dbutils.widgets.text("job_name_contains", "validation_")
 dbutils.widgets.dropdown("pause_schedule", "pause", ["pause", "resume"])
 dbutils.widgets.dropdown("cancel_all_runs", "N", ["Y", "N"])
 dbutils.widgets.dropdown("cancel_queued_runs", "N", ["Y", "N"])

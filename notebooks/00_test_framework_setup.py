@@ -1,798 +1,781 @@
 # Databricks notebook source
 """
-DeltaRecon Framework Test Setup
-================================
+Test Framework Setup - Core Functionality Testing
 
-This notebook creates a complete test environment for the validation framework:
-1. Creates test schemas and tables (source + target)
-2. Generates sample data with controlled scenarios (matches, mismatches, extras)
-3. Creates ORC files in DBFS
-4. Populates ingestion metadata tables
-5. Ready for validation testing
+This notebook creates a simple test environment to validate the DeltaRecon framework:
+- Creates 2 test tables (products, customers)
+- Creates 2 batches for each table
+- Sets up source ORC files in DBFS
+- Populates all ingestion metadata tables
+- Tests metrics collection
 
-Test Scenarios:
-- Table 1: orders (Perfect match scenario)
-- Table 2: customers (Schema mismatch scenario)  
-- Table 3: products (Data mismatch scenario)
-
-After running this, manually execute:
-1. 02_setup_validation_mapping.py - to populate validation_mapping
-2. Create validation jobs
-3. Run validations to test metrics collection
+After running this notebook, you can:
+1. Run 02_setup_validation_mapping.py to sync validation configs
+2. Create and run validation jobs
 """
 
 # COMMAND ----------
 
-# DBTITLE 1,Test Configuration
-TEST_CONFIG = {
-    # Test environment settings
-    "test_catalog": "ts42_demo",
-    "test_schema": "deltarecon_test",
-    "source_schema": "deltarecon_test_source",
-    "test_dbfs_path": "dbfs:/FileStore/deltarecon_test_data",
-    "table_group": "test_group_validation",
-    
-    # Batch configuration
-    "batches": [
-        {
-            "batch_id": "BATCH_20251102_000001",
-            "run_id": "RUN_20251102_000001",
-            "row_count": 100
-        },
-        {
-            "batch_id": "BATCH_20251102_000002", 
-            "run_id": "RUN_20251102_000002",
-            "row_count": 50
-        }
-    ],
-    
-    # Tables to create with test scenarios
-    "tables": [
-        {
-            "name": "orders",
-            "primary_key": "order_id",
-            "scenario": "perfect_match",
-            "description": "All validations should PASS"
-        },
-        {
-            "name": "customers",
-            "primary_key": "customer_id",
-            "scenario": "schema_mismatch",
-            "description": "Schema validation should FAIL (missing column in target)"
-        },
-        {
-            "name": "products",
-            "primary_key": "product_id",
-            "scenario": "data_mismatch",
-            "description": "Data reconciliation should detect mismatches"
-        }
-    ]
-}
-
-print("=" * 80)
-print("DELTARECON FRAMEWORK TEST SETUP")
-print("=" * 80)
-print(f"Test Catalog: {TEST_CONFIG['test_catalog']}")
-print(f"Test Schema: {TEST_CONFIG['test_schema']}")
-print(f"Source Schema: {TEST_CONFIG['source_schema']}")
-print(f"DBFS Path: {TEST_CONFIG['test_dbfs_path']}")
-print(f"Table Group: {TEST_CONFIG['table_group']}")
-print(f"Number of Batches: {len(TEST_CONFIG['batches'])}")
-print(f"Number of Tables: {len(TEST_CONFIG['tables'])}")
-print("=" * 80)
-
-# COMMAND ----------
-
-# DBTITLE 1,Import Libraries
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
+# DBTITLE 1,Setup and Imports
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DecimalType, TimestampType, LongType
+from pyspark.sql.functions import current_timestamp, lit
 from datetime import datetime, timedelta
 import random
-import uuid
 
 # Import framework constants
 from deltarecon.config import constants
 
-print(f"Framework Version: {constants.FRAMEWORK_VERSION}")
-print(f"Ingestion Config Table: {constants.INGESTION_CONFIG_TABLE}")
-print(f"Ingestion Audit Table: {constants.INGESTION_AUDIT_TABLE}")
-print(f"Ingestion Metadata Table: {constants.INGESTION_METADATA_TABLE}")
+# COMMAND ----------
+
+# DBTITLE 1,Configuration
+# Test configuration
+TEST_GROUP = "test_group_1"
+TEST_CATALOG = "ts42_demo"
+TEST_SCHEMA = "test_validation"
+SOURCE_SCHEMA = "source_system"
+SOURCE_DATABASE = "raw_db"
+
+# DBFS paths
+DBFS_BASE_PATH = "dbfs:/FileStore/deltarecon_test"
+PRODUCTS_PATH = f"{DBFS_BASE_PATH}/products"
+CUSTOMERS_PATH = f"{DBFS_BASE_PATH}/customers"
+
+# Batch IDs
+BATCH_1 = f"BATCH_{datetime.now().strftime('%Y%m%d')}_000001"
+BATCH_2 = f"BATCH_{datetime.now().strftime('%Y%m%d')}_000002"
+
+print("=" * 80)
+print("TEST CONFIGURATION")
+print("=" * 80)
+print(f"Test Group: {TEST_GROUP}")
+print(f"Test Catalog: {TEST_CATALOG}")
+print(f"Test Schema: {TEST_SCHEMA}")
+print(f"Source: {SOURCE_SCHEMA}.{SOURCE_DATABASE}")
+print(f"DBFS Base Path: {DBFS_BASE_PATH}")
+print(f"Batch 1: {BATCH_1}")
+print(f"Batch 2: {BATCH_2}")
+print("=" * 80)
 
 # COMMAND ----------
 
-# DBTITLE 1,Step 1: Create Schemas
-print("\n" + "="*80)
-print("STEP 1: Creating Test Schemas")
-print("="*80)
+# DBTITLE 1,Create Test Schema
+print("Creating test schema...")
 
-# Create target schema
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {TEST_CONFIG['test_catalog']}.{TEST_CONFIG['test_schema']}")
-print(f"✓ Created target schema: {TEST_CONFIG['test_catalog']}.{TEST_CONFIG['test_schema']}")
+# Create catalog if not exists
+spark.sql(f"CREATE CATALOG IF NOT EXISTS {TEST_CATALOG}")
 
-# Create source schema (simulating external system)
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {TEST_CONFIG['test_catalog']}.{TEST_CONFIG['source_schema']}")
-print(f"✓ Created source schema: {TEST_CONFIG['test_catalog']}.{TEST_CONFIG['source_schema']}")
+# Create test schema
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {TEST_CATALOG}.{TEST_SCHEMA}")
+
+print(f"✓ Schema created: {TEST_CATALOG}.{TEST_SCHEMA}")
 
 # COMMAND ----------
 
-# DBTITLE 1,Step 2: Create Test Tables - ORDERS (Perfect Match)
+# DBTITLE 1,Define Test Data Schemas
 
-print("\n" + "="*80)
-print("STEP 2: Creating Test Tables")
-print("="*80)
+# Products schema
+products_schema = StructType([
+    StructField('product_id', IntegerType(), False),
+    StructField('product_name', StringType(), True),
+    StructField('category', StringType(), True),
+    StructField('price', DecimalType(10, 2), True),
+    StructField('stock_quantity', IntegerType(), True),
+    StructField('_aud_batch_load_id', StringType(), True)
+])
 
-# ============================================================================
-# TABLE 1: ORDERS (Perfect Match Scenario)
-# ============================================================================
-print("\n--- Creating ORDERS Table (Perfect Match Scenario) ---")
+# Customers schema
+customers_schema = StructType([
+    StructField('customer_id', IntegerType(), False),
+    StructField('customer_name', StringType(), True),
+    StructField('email', StringType(), True),
+    StructField('country', StringType(), True),
+    StructField('signup_date', StringType(), True),
+    StructField('_aud_batch_load_id', StringType(), True)
+])
 
-# Source table DDL
-spark.sql(f"""
-CREATE TABLE IF NOT EXISTS {TEST_CONFIG['test_catalog']}.{TEST_CONFIG['source_schema']}.orders (
-    order_id BIGINT COMMENT 'Unique order identifier',
-    customer_id BIGINT COMMENT 'Customer who placed the order',
-    order_date DATE COMMENT 'Date order was placed',
-    order_amount DECIMAL(10,2) COMMENT 'Total order amount',
-    order_status STRING COMMENT 'Order status',
-    product_category STRING COMMENT 'Product category',
-    shipping_city STRING COMMENT 'Shipping city',
-    payment_method STRING COMMENT 'Payment method used',
-    _aud_batch_load_id STRING COMMENT 'Audit batch load ID'
-) USING DELTA
-COMMENT 'Orders source table - perfect match test scenario'
-""")
-
-# Target table DDL (same structure)
-spark.sql(f"""
-CREATE TABLE IF NOT EXISTS {TEST_CONFIG['test_catalog']}.{TEST_CONFIG['test_schema']}.orders (
-    order_id BIGINT COMMENT 'Unique order identifier',
-    customer_id BIGINT COMMENT 'Customer who placed the order',
-    order_date DATE COMMENT 'Date order was placed',
-    order_amount DECIMAL(10,2) COMMENT 'Total order amount',
-    order_status STRING COMMENT 'Order status',
-    product_category STRING COMMENT 'Product category',
-    shipping_city STRING COMMENT 'Shipping city',
-    payment_method STRING COMMENT 'Payment method used',
-    _aud_batch_load_id STRING COMMENT 'Audit batch load ID'
-) USING DELTA
-COMMENT 'Orders target table - perfect match test scenario'
-""")
-
-print("✓ Created source and target tables for ORDERS")
+print("✓ Schemas defined")
 
 # COMMAND ----------
 
-# DBTITLE 1,Step 3: Create Test Tables - CUSTOMERS (Schema Mismatch)
+# DBTITLE 1,Generate Test Data - Products Batch 1
+print(f"Generating products data for {BATCH_1}...")
 
-# ============================================================================
-# TABLE 2: CUSTOMERS (Schema Mismatch Scenario)
-# ============================================================================
-print("\n--- Creating CUSTOMERS Table (Schema Mismatch Scenario) ---")
+products_batch1_data = [
+    (1, 'Laptop Pro 15', 'Electronics', 1299.99, 50, BATCH_1),
+    (2, 'Wireless Mouse', 'Electronics', 29.99, 200, BATCH_1),
+    (3, 'Office Desk', 'Furniture', 349.99, 30, BATCH_1),
+    (4, 'Coffee Maker', 'Appliances', 89.99, 75, BATCH_1),
+    (5, 'Notebook Set', 'Stationery', 12.99, 150, BATCH_1),
+]
 
-# Source table has email column
-spark.sql(f"""
-CREATE TABLE IF NOT EXISTS {TEST_CONFIG['test_catalog']}.{TEST_CONFIG['source_schema']}.customers (
-    customer_id BIGINT COMMENT 'Unique customer identifier',
-    customer_name STRING COMMENT 'Customer full name',
-    email STRING COMMENT 'Customer email address',
-    phone STRING COMMENT 'Customer phone number',
-    city STRING COMMENT 'Customer city',
-    state STRING COMMENT 'Customer state',
-    signup_date DATE COMMENT 'Customer signup date',
-    customer_segment STRING COMMENT 'Customer segment (Gold/Silver/Bronze)',
-    _aud_batch_load_id STRING COMMENT 'Audit batch load ID'
-) USING DELTA
-COMMENT 'Customers source table - schema mismatch test scenario'
-""")
-
-# Target table missing email column (schema mismatch)
-spark.sql(f"""
-CREATE TABLE IF NOT EXISTS {TEST_CONFIG['test_catalog']}.{TEST_CONFIG['test_schema']}.customers (
-    customer_id BIGINT COMMENT 'Unique customer identifier',
-    customer_name STRING COMMENT 'Customer full name',
-    phone STRING COMMENT 'Customer phone number',
-    city STRING COMMENT 'Customer city',
-    state STRING COMMENT 'Customer state',
-    signup_date DATE COMMENT 'Customer signup date',
-    customer_segment STRING COMMENT 'Customer segment (Gold/Silver/Bronze)',
-    _aud_batch_load_id STRING COMMENT 'Audit batch load ID'
-) USING DELTA
-COMMENT 'Customers target table - missing email column for schema mismatch test'
-""")
-
-print("✓ Created source and target tables for CUSTOMERS (target missing 'email' column)")
+products_batch1_df = spark.createDataFrame(products_batch1_data, products_schema)
+print(f"✓ Created {products_batch1_df.count()} products for Batch 1")
+display(products_batch1_df)
 
 # COMMAND ----------
 
-# DBTITLE 1,Step 4: Create Test Tables - PRODUCTS (Data Mismatch)
+# DBTITLE 1,Generate Test Data - Products Batch 2
+print(f"Generating products data for {BATCH_2}...")
 
-# ============================================================================
-# TABLE 3: PRODUCTS (Data Mismatch Scenario)
-# ============================================================================
-print("\n--- Creating PRODUCTS Table (Data Mismatch Scenario) ---")
+products_batch2_data = [
+    (6, 'USB-C Cable', 'Electronics', 19.99, 300, BATCH_2),
+    (7, 'Standing Desk', 'Furniture', 499.99, 20, BATCH_2),
+    (8, 'Water Bottle', 'Accessories', 24.99, 100, BATCH_2),
+    (9, 'Monitor 27"', 'Electronics', 349.99, 40, BATCH_2),
+    (10, 'Desk Lamp', 'Furniture', 45.99, 80, BATCH_2),
+]
 
-# Source table DDL
-spark.sql(f"""
-CREATE TABLE IF NOT EXISTS {TEST_CONFIG['test_catalog']}.{TEST_CONFIG['source_schema']}.products (
-    product_id BIGINT COMMENT 'Unique product identifier',
-    product_name STRING COMMENT 'Product name',
-    category STRING COMMENT 'Product category',
-    price DECIMAL(10,2) COMMENT 'Product price',
-    stock_quantity INT COMMENT 'Stock quantity',
-    supplier_id BIGINT COMMENT 'Supplier identifier',
-    is_active BOOLEAN COMMENT 'Whether product is active',
-    last_updated TIMESTAMP COMMENT 'Last update timestamp',
-    _aud_batch_load_id STRING COMMENT 'Audit batch load ID'
-) USING DELTA
-COMMENT 'Products source table - data mismatch test scenario'
-""")
-
-# Target table DDL (same structure but will have data mismatches)
-spark.sql(f"""
-CREATE TABLE IF NOT EXISTS {TEST_CONFIG['test_catalog']}.{TEST_CONFIG['test_schema']}.products (
-    product_id BIGINT COMMENT 'Unique product identifier',
-    product_name STRING COMMENT 'Product name',
-    category STRING COMMENT 'Product category',
-    price DECIMAL(10,2) COMMENT 'Product price',
-    stock_quantity INT COMMENT 'Stock quantity',
-    supplier_id BIGINT COMMENT 'Supplier identifier',
-    is_active BOOLEAN COMMENT 'Whether product is active',
-    last_updated TIMESTAMP COMMENT 'Last update timestamp',
-    _aud_batch_load_id STRING COMMENT 'Audit batch load ID'
-) USING DELTA
-COMMENT 'Products target table - will have data mismatches'
-""")
-
-print("✓ Created source and target tables for PRODUCTS")
-
-print("\n" + "="*80)
-print("All test tables created successfully!")
-print("="*80)
+products_batch2_df = spark.createDataFrame(products_batch2_data, products_schema)
+print(f"✓ Created {products_batch2_df.count()} products for Batch 2")
+display(products_batch2_df)
 
 # COMMAND ----------
 
-# DBTITLE 1,Step 5: Generate and Load Test Data - ORDERS
+# DBTITLE 1,Generate Test Data - Customers Batch 1
+print(f"Generating customers data for {BATCH_1}...")
 
-print("\n" + "="*80)
-print("STEP 5: Generating and Loading Test Data")
-print("="*80)
+customers_batch1_data = [
+    (101, 'Alice Johnson', 'alice.j@email.com', 'USA', '2024-01-15', BATCH_1),
+    (102, 'Bob Smith', 'bob.smith@email.com', 'UK', '2024-01-16', BATCH_1),
+    (103, 'Charlie Brown', 'charlie.b@email.com', 'Canada', '2024-01-17', BATCH_1),
+    (104, 'Diana Prince', 'diana.p@email.com', 'USA', '2024-01-18', BATCH_1),
+    (105, 'Eve Wilson', 'eve.w@email.com', 'Australia', '2024-01-19', BATCH_1),
+]
 
-# ============================================================================
-# Generate ORDERS data (Perfect Match)
-# ============================================================================
-print("\n--- Generating ORDERS data (Perfect Match) ---")
-
-def generate_orders_data(batch_config):
-    """Generate orders data for a batch"""
-    from decimal import Decimal
-    
-    batch_id = batch_config['batch_id']
-    row_count = batch_config['row_count']
-    
-    # Generate deterministic data based on batch_id
-    seed_value = int(batch_id.split('_')[-1])
-    random.seed(seed_value)
-    
-    orders_data = []
-    base_order_id = seed_value * 1000
-    
-    for i in range(row_count):
-        order_id = base_order_id + i
-        # Use Python's Decimal to match table's DECIMAL(10,2) type
-        order_amount = Decimal(str(random.uniform(10.0, 1000.0))).quantize(Decimal('0.01'))
-        
-        orders_data.append({
-            'order_id': order_id,
-            'customer_id': random.randint(1, 50),
-            'order_date': (datetime.now() - timedelta(days=random.randint(0, 365))).date(),
-            'order_amount': order_amount,
-            'order_status': random.choice(['PENDING', 'COMPLETED', 'SHIPPED', 'DELIVERED', 'CANCELLED']),
-            'product_category': random.choice(['Electronics', 'Clothing', 'Home', 'Sports', 'Books']),
-            'shipping_city': random.choice(['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix']),
-            'payment_method': random.choice(['Credit Card', 'Debit Card', 'PayPal', 'Cash']),
-            '_aud_batch_load_id': batch_id
-        })
-    
-    return orders_data
-
-# Process each batch
-for batch_config in TEST_CONFIG['batches']:
-    batch_id = batch_config['batch_id']
-    print(f"\nProcessing batch: {batch_id}")
-    
-    # Generate data
-    orders_data = generate_orders_data(batch_config)
-    orders_df = spark.createDataFrame(orders_data)
-    
-    # Write to both source and target (perfect match)
-    orders_df.write.mode("append").saveAsTable(
-        f"{TEST_CONFIG['test_catalog']}.{TEST_CONFIG['source_schema']}.orders"
-    )
-    orders_df.write.mode("append").saveAsTable(
-        f"{TEST_CONFIG['test_catalog']}.{TEST_CONFIG['test_schema']}.orders"
-    )
-    
-    print(f"  ✓ Loaded {len(orders_data)} records to source and target")
-
-print("\n✓ ORDERS data loaded successfully (perfect match)")
+customers_batch1_df = spark.createDataFrame(customers_batch1_data, customers_schema)
+print(f"✓ Created {customers_batch1_df.count()} customers for Batch 1")
+display(customers_batch1_df)
 
 # COMMAND ----------
 
-# DBTITLE 1,Step 6: Generate and Load Test Data - CUSTOMERS
+# DBTITLE 1,Generate Test Data - Customers Batch 2
+print(f"Generating customers data for {BATCH_2}...")
 
-# ============================================================================
-# Generate CUSTOMERS data (Schema Mismatch)
-# ============================================================================
-print("\n--- Generating CUSTOMERS data (Schema Mismatch) ---")
+customers_batch2_data = [
+    (106, 'Frank Miller', 'frank.m@email.com', 'Germany', '2024-01-20', BATCH_2),
+    (107, 'Grace Lee', 'grace.lee@email.com', 'Singapore', '2024-01-21', BATCH_2),
+    (108, 'Henry Ford', 'henry.f@email.com', 'USA', '2024-01-22', BATCH_2),
+    (109, 'Ivy Chen', 'ivy.chen@email.com', 'China', '2024-01-23', BATCH_2),
+    (110, 'Jack Davis', 'jack.d@email.com', 'UK', '2024-01-24', BATCH_2),
+]
 
-def generate_customers_data(batch_config, include_email=True):
-    """Generate customers data for a batch"""
-    batch_id = batch_config['batch_id']
-    row_count = batch_config['row_count']
-    
-    seed_value = int(batch_id.split('_')[-1])
-    random.seed(seed_value)
-    
-    customers_data = []
-    base_customer_id = seed_value * 1000
-    
-    for i in range(row_count):
-        customer_id = base_customer_id + i
-        customer = {
-            'customer_id': customer_id,
-            'customer_name': f'Customer_{customer_id}',
-            'phone': f'+1-555-{random.randint(1000, 9999)}',
-            'city': random.choice(['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix']),
-            'state': random.choice(['NY', 'CA', 'IL', 'TX', 'AZ']),
-            'signup_date': (datetime.now() - timedelta(days=random.randint(0, 730))).date(),
-            'customer_segment': random.choice(['Gold', 'Silver', 'Bronze']),
-            '_aud_batch_load_id': batch_id
-        }
-        
-        # Add email only for source (schema mismatch)
-        if include_email:
-            customer['email'] = f'customer{customer_id}@example.com'
-        
-        customers_data.append(customer)
-    
-    return customers_data
-
-# Process each batch
-for batch_config in TEST_CONFIG['batches']:
-    batch_id = batch_config['batch_id']
-    print(f"\nProcessing batch: {batch_id}")
-    
-    # Generate source data (with email)
-    customers_data_source = generate_customers_data(batch_config, include_email=True)
-    customers_df_source = spark.createDataFrame(customers_data_source)
-    
-    # Generate target data (without email - will be dropped automatically)
-    customers_data_target = generate_customers_data(batch_config, include_email=False)
-    customers_df_target = spark.createDataFrame(customers_data_target)
-    
-    # Write to source and target
-    customers_df_source.write.mode("append").saveAsTable(
-        f"{TEST_CONFIG['test_catalog']}.{TEST_CONFIG['source_schema']}.customers"
-    )
-    customers_df_target.write.mode("append").saveAsTable(
-        f"{TEST_CONFIG['test_catalog']}.{TEST_CONFIG['test_schema']}.customers"
-    )
-    
-    print(f"  ✓ Loaded {len(customers_data_source)} records (source has email, target doesn't)")
-
-print("\n✓ CUSTOMERS data loaded successfully (schema mismatch)")
+customers_batch2_df = spark.createDataFrame(customers_batch2_data, customers_schema)
+print(f"✓ Created {customers_batch2_df.count()} customers for Batch 2")
+display(customers_batch2_df)
 
 # COMMAND ----------
 
-# DBTITLE 1,Step 7: Generate and Load Test Data - PRODUCTS
+# DBTITLE 1,Write Source ORC Files - Products
+print("Writing products ORC files to DBFS...")
 
-# ============================================================================
-# Generate PRODUCTS data (Data Mismatch)
-# ============================================================================
-print("\n--- Generating PRODUCTS data (Data Mismatch) ---")
+# Write Batch 1
+products_batch1_path = f"{PRODUCTS_PATH}/{BATCH_1}"
+products_batch1_df.write.mode("overwrite").format("orc").save(products_batch1_path)
+print(f"✓ Wrote products Batch 1 to: {products_batch1_path}")
 
-def generate_products_data(batch_config, introduce_mismatch=False):
-    """Generate products data for a batch"""
-    from decimal import Decimal
-    
-    batch_id = batch_config['batch_id']
-    row_count = batch_config['row_count']
-    
-    seed_value = int(batch_id.split('_')[-1])
-    random.seed(seed_value)
-    
-    products_data = []
-    base_product_id = seed_value * 1000
-    
-    for i in range(row_count):
-        product_id = base_product_id + i
-        
-        # Use Decimal to match table's DECIMAL(10,2) type
-        price = Decimal(str(random.uniform(5.0, 500.0))).quantize(Decimal('0.01'))
-        
-        # Base product data
-        product = {
-            'product_id': product_id,
-            'product_name': f'Product_{product_id}',
-            'category': random.choice(['Electronics', 'Clothing', 'Home', 'Sports', 'Books']),
-            'price': price,
-            'stock_quantity': random.randint(0, 1000),
-            'supplier_id': random.randint(1, 20),
-            'is_active': random.choice([True, False]),
-            'last_updated': datetime.now() - timedelta(hours=random.randint(0, 720)),
-            '_aud_batch_load_id': batch_id
-        }
-        
-        # Introduce mismatches in ~10% of records for target
-        if introduce_mismatch and i % 10 == 0:
-            # Use Decimal for price adjustment too
-            adjusted_price = price * Decimal('1.1')
-            product['price'] = adjusted_price.quantize(Decimal('0.01'))
-            product['stock_quantity'] = product['stock_quantity'] + 10  # Stock difference
-        
-        products_data.append(product)
-    
-    return products_data
+# Write Batch 2
+products_batch2_path = f"{PRODUCTS_PATH}/{BATCH_2}"
+products_batch2_df.write.mode("overwrite").format("orc").save(products_batch2_path)
+print(f"✓ Wrote products Batch 2 to: {products_batch2_path}")
 
-# Process each batch
-for batch_config in TEST_CONFIG['batches']:
-    batch_id = batch_config['batch_id']
-    print(f"\nProcessing batch: {batch_id}")
-    
-    # Generate source data (no mismatches)
-    products_data_source = generate_products_data(batch_config, introduce_mismatch=False)
-    products_df_source = spark.createDataFrame(products_data_source)
-    
-    # Generate target data (with mismatches)
-    products_data_target = generate_products_data(batch_config, introduce_mismatch=True)
-    products_df_target = spark.createDataFrame(products_data_target)
-    
-    # Write to source and target
-    products_df_source.write.mode("append").saveAsTable(
-        f"{TEST_CONFIG['test_catalog']}.{TEST_CONFIG['source_schema']}.products"
-    )
-    products_df_target.write.mode("append").saveAsTable(
-        f"{TEST_CONFIG['test_catalog']}.{TEST_CONFIG['test_schema']}.products"
-    )
-    
-    expected_mismatches = batch_config['row_count'] // 10
-    print(f"  ✓ Loaded {len(products_data_source)} records (~{expected_mismatches} intentional mismatches)")
-
-print("\n✓ PRODUCTS data loaded successfully (data mismatches)")
+# List files to verify
+print("\nVerifying products files:")
+dbutils.fs.ls(PRODUCTS_PATH)
 
 # COMMAND ----------
 
-# DBTITLE 1,Step 8: Create ORC Files for Source Data
+# DBTITLE 1,Write Source ORC Files - Customers
+print("Writing customers ORC files to DBFS...")
 
-print("\n" + "="*80)
-print("STEP 8: Creating ORC Files in DBFS")
-print("="*80)
+# Write Batch 1
+customers_batch1_path = f"{CUSTOMERS_PATH}/{BATCH_1}"
+customers_batch1_df.write.mode("overwrite").format("orc").save(customers_batch1_path)
+print(f"✓ Wrote customers Batch 1 to: {customers_batch1_path}")
 
-import os
+# Write Batch 2
+customers_batch2_path = f"{CUSTOMERS_PATH}/{BATCH_2}"
+customers_batch2_df.write.mode("overwrite").format("orc").save(customers_batch2_path)
+print(f"✓ Wrote customers Batch 2 to: {customers_batch2_path}")
 
-# Create base directory
-dbutils.fs.mkdirs(TEST_CONFIG['test_dbfs_path'])
-print(f"✓ Created base directory: {TEST_CONFIG['test_dbfs_path']}")
-
-# Track ORC file paths for metadata
-orc_file_metadata = []
-
-for table_info in TEST_CONFIG['tables']:
-    table_name = table_info['name']
-    full_source_table = f"{TEST_CONFIG['test_catalog']}.{TEST_CONFIG['source_schema']}.{table_name}"
-    
-    print(f"\n--- Creating ORC files for {table_name.upper()} ---")
-    
-    for batch_config in TEST_CONFIG['batches']:
-        batch_id = batch_config['batch_id']
-        
-        # Create batch-specific directory
-        batch_path = f"{TEST_CONFIG['test_dbfs_path']}/{table_name}/{batch_id}"
-        
-        # Read data for this batch from source table
-        batch_df = spark.table(full_source_table).filter(f"_aud_batch_load_id = '{batch_id}'")
-        row_count = batch_df.count()
-        
-        # Write as ORC
-        batch_df.write.mode("overwrite").format("orc").save(batch_path)
-        
-        # List ORC files created
-        orc_files = [f.path for f in dbutils.fs.ls(batch_path) if f.path.endswith('.orc')]
-        
-        print(f"  ✓ Batch {batch_id}: {len(orc_files)} ORC file(s), {row_count} records")
-        print(f"    Path: {batch_path}")
-        
-        # Store metadata for later
-        for orc_file in orc_files:
-            orc_file_metadata.append({
-                'table_name': f"{TEST_CONFIG['test_catalog']}.{TEST_CONFIG['test_schema']}.{table_name}",
-                'batch_load_id': batch_id,
-                'source_file_path': orc_file,
-                'row_count': row_count
-            })
-
-print(f"\n✓ Created {len(orc_file_metadata)} ORC file(s) total")
-print(f"✓ Base path: {TEST_CONFIG['test_dbfs_path']}")
+# List files to verify
+print("\nVerifying customers files:")
+dbutils.fs.ls(CUSTOMERS_PATH)
 
 # COMMAND ----------
 
-# DBTITLE 1,Step 9: Populate Ingestion Config Table
+# DBTITLE 1,Create Target Tables - Products
+print("Creating target products table...")
 
-print("\n" + "="*80)
-print("STEP 9: Populating Ingestion Metadata Tables")
-print("="*80)
+target_products_table = f"{TEST_CATALOG}.{TEST_SCHEMA}.products"
 
-print("\n--- Populating serving_ingestion_config ---")
+# Create table from batch 1 and batch 2 data
+products_all_df = products_batch1_df.union(products_batch2_df)
+products_all_df.write.mode("overwrite").format("delta").saveAsTable(target_products_table)
 
-# Prepare ingestion config data
-config_data = []
-for table_info in TEST_CONFIG['tables']:
-    table_name = table_info['name']
-    config_data.append({
-        'config_id': f"TEST_{table_name.upper()}_{uuid.uuid4().hex[:8]}",
-        'group_name': TEST_CONFIG['table_group'],
-        'source_schema': TEST_CONFIG['source_schema'],
-        'source_table': table_name,
-        'source_file_path': f"{TEST_CONFIG['test_dbfs_path']}/{table_name}",
-        'target_catalog': TEST_CONFIG['test_catalog'],
-        'target_schema': TEST_CONFIG['test_schema'],
-        'target_table': table_name,
-        'source_file_format': 'orc',
-        'source_file_options': None,
-        'load_type': 'incremental',
-        'write_mode': 'append',
-        'primary_key': table_info['primary_key'],
-        'partition_column': None,
-        'partitioning_strategy': None,
-        'frequency': 'daily',
-        'table_size_gb': '0.001',
-        'column_datatype_mapping': None,
-        'delta_properties': None,
-        'clean_column_names': 'N',
-        'deduplicate': 'N',
-        'is_active': 'Y',
-        'insert_ts': datetime.now(),
-        'last_update_ts': datetime.now(),
-        'timestamp_column': None,
-        'schedule': 'daily',
-        'job_tags': 'test'
-    })
-
-# Create DataFrame and write
-config_df = spark.createDataFrame(config_data)
-config_df.write.mode("append").saveAsTable(constants.INGESTION_CONFIG_TABLE)
-
-print(f"✓ Inserted {len(config_data)} configuration record(s)")
+print(f"✓ Created target table: {target_products_table}")
+print(f"  Total rows: {spark.table(target_products_table).count()}")
+display(spark.table(target_products_table))
 
 # COMMAND ----------
 
-# DBTITLE 1,Step 10: Populate Ingestion Audit Table
+# DBTITLE 1,Create Target Tables - Customers
+print("Creating target customers table...")
 
-print("\n--- Populating serving_ingestion_audit ---")
+target_customers_table = f"{TEST_CATALOG}.{TEST_SCHEMA}.customers"
 
-# Prepare ingestion audit data
-audit_data = []
-for table_info in TEST_CONFIG['tables']:
-    table_name = table_info['name']
-    full_table_name = f"{TEST_CONFIG['test_catalog']}.{TEST_CONFIG['test_schema']}.{table_name}"
-    
-    for batch_config in TEST_CONFIG['batches']:
-        audit_data.append({
-            'run_id': batch_config['run_id'],
-            'config_id': f"TEST_{table_name.upper()}",
-            'batch_load_id': batch_config['batch_id'],
-            'group_name': TEST_CONFIG['table_group'],
-            'target_table_name': full_table_name,
-            'operation_type': 'LOAD',
-            'load_type': 'BATCH',
-            'status': 'COMPLETED',
-            'start_ts': datetime.now() - timedelta(minutes=10),
-            'end_ts': datetime.now() - timedelta(minutes=5),
-            'log_message': f"Test data loaded for {table_name}",
-            'microbatch_id': None,
-            'row_count': batch_config['row_count']
-        })
+# Create table from batch 1 and batch 2 data
+customers_all_df = customers_batch1_df.union(customers_batch2_df)
+customers_all_df.write.mode("overwrite").format("delta").saveAsTable(target_customers_table)
 
-# Create DataFrame and write
-audit_df = spark.createDataFrame(audit_data)
-audit_df.write.mode("append").saveAsTable(constants.INGESTION_AUDIT_TABLE)
-
-print(f"✓ Inserted {len(audit_data)} audit record(s)")
+print(f"✓ Created target table: {target_customers_table}")
+print(f"  Total rows: {spark.table(target_customers_table).count()}")
+display(spark.table(target_customers_table))
 
 # COMMAND ----------
 
-# DBTITLE 1,Step 11: Populate Ingestion Metadata Table
+# DBTITLE 1,Insert into serving_ingestion_config - Products
+print("Inserting products config into serving_ingestion_config...")
 
-print("\n--- Populating serving_ingestion_metadata ---")
+products_config_insert = f"""
+INSERT INTO {constants.INGESTION_CONFIG_TABLE}
+(
+    config_id,
+    group_name,
+    source_schema,
+    source_table,
+    source_file_path,
+    target_catalog,
+    target_schema,
+    target_table,
+    source_file_format,
+    load_type,
+    write_mode,
+    primary_key,
+    partition_column,
+    is_active,
+    insert_ts,
+    last_update_ts
+)
+VALUES (
+    'CONFIG_PRODUCTS_001',
+    '{TEST_GROUP}',
+    '{SOURCE_DATABASE}',
+    'products',
+    '{PRODUCTS_PATH}',
+    '{TEST_CATALOG}',
+    '{TEST_SCHEMA}',
+    'products',
+    'orc',
+    'batch',
+    'append',
+    'product_id',
+    NULL,
+    'Y',
+    current_timestamp(),
+    current_timestamp()
+)
+"""
 
-# Prepare ingestion metadata data
-metadata_records = []
-for orc_meta in orc_file_metadata:
-    # Get file size (approximate)
-    try:
-        file_info = dbutils.fs.ls(orc_meta['source_file_path'])[0]
-        file_size = file_info.size
-    except:
-        file_size = 1000  # Default if can't get size
-    
-    metadata_records.append({
-        'table_name': orc_meta['table_name'],
-        'batch_load_id': orc_meta['batch_load_id'],
-        'source_file_path': orc_meta['source_file_path'],
-        'file_modification_time': datetime.now() - timedelta(minutes=15),
-        'file_size': file_size,
-        'is_processed': 'Y',
-        'insert_ts': datetime.now() - timedelta(minutes=10),
-        'last_update_ts': datetime.now() - timedelta(minutes=10)
-    })
-
-# Create DataFrame and write
-metadata_df = spark.createDataFrame(metadata_records)
-metadata_df.write.mode("append").saveAsTable(constants.INGESTION_METADATA_TABLE)
-
-print(f"✓ Inserted {len(metadata_records)} metadata record(s)")
+spark.sql(products_config_insert)
+print("✓ Products config inserted")
 
 # COMMAND ----------
 
-# DBTITLE 1,Step 12: Verification and Summary
+# DBTITLE 1,Insert into serving_ingestion_config - Customers
+print("Inserting customers config into serving_ingestion_config...")
 
-print("\n" + "="*80)
-print("STEP 12: Verification and Summary")
-print("="*80)
+customers_config_insert = f"""
+INSERT INTO {constants.INGESTION_CONFIG_TABLE}
+(
+    config_id,
+    group_name,
+    source_schema,
+    source_table,
+    source_file_path,
+    target_catalog,
+    target_schema,
+    target_table,
+    source_file_format,
+    load_type,
+    write_mode,
+    primary_key,
+    partition_column,
+    is_active,
+    insert_ts,
+    last_update_ts
+)
+VALUES (
+    'CONFIG_CUSTOMERS_001',
+    '{TEST_GROUP}',
+    '{SOURCE_DATABASE}',
+    'customers',
+    '{CUSTOMERS_PATH}',
+    '{TEST_CATALOG}',
+    '{TEST_SCHEMA}',
+    'customers',
+    'orc',
+    'batch',
+    'append',
+    'customer_id',
+    NULL,
+    'Y',
+    current_timestamp(),
+    current_timestamp()
+)
+"""
 
-# Verify table counts
-print("\n--- Table Row Counts ---")
-for table_info in TEST_CONFIG['tables']:
-    table_name = table_info['name']
-    
-    source_table = f"{TEST_CONFIG['test_catalog']}.{TEST_CONFIG['source_schema']}.{table_name}"
-    target_table = f"{TEST_CONFIG['test_catalog']}.{TEST_CONFIG['test_schema']}.{table_name}"
-    
-    source_count = spark.table(source_table).count()
-    target_count = spark.table(target_table).count()
-    
-    print(f"\n{table_name.upper()}:")
-    print(f"  Source: {source_count} records")
-    print(f"  Target: {target_count} records")
-    print(f"  Scenario: {table_info['scenario']}")
-    print(f"  Expected: {table_info['description']}")
+spark.sql(customers_config_insert)
+print("✓ Customers config inserted")
 
-# Verify metadata
-print("\n--- Ingestion Metadata Verification ---")
+# COMMAND ----------
 
-config_count = spark.sql(f"""
-    SELECT COUNT(*) as cnt 
-    FROM {constants.INGESTION_CONFIG_TABLE}
-    WHERE group_name = '{TEST_CONFIG['table_group']}'
-""").collect()[0].cnt
-print(f"Config records: {config_count}")
+# DBTITLE 1,Verify ingestion_config entries
+print("Verifying ingestion_config entries...")
 
-audit_count = spark.sql(f"""
-    SELECT COUNT(*) as cnt 
-    FROM {constants.INGESTION_AUDIT_TABLE}
-    WHERE group_name = '{TEST_CONFIG['table_group']}'
-""").collect()[0].cnt
-print(f"Audit records: {audit_count}")
-
-metadata_count = spark.sql(f"""
-    SELECT COUNT(*) as cnt 
-    FROM {constants.INGESTION_METADATA_TABLE}
-    WHERE table_name LIKE '{TEST_CONFIG['test_catalog']}.{TEST_CONFIG['test_schema']}.%'
-""").collect()[0].cnt
-print(f"Metadata records: {metadata_count}")
-
-# Show batch details
-print("\n--- Batch Details ---")
-batch_df = spark.sql(f"""
+config_check = spark.sql(f"""
     SELECT 
-        target_table_name,
+        config_id,
+        group_name,
+        source_table,
+        target_catalog,
+        target_schema,
+        target_table,
+        primary_key,
+        is_active
+    FROM {constants.INGESTION_CONFIG_TABLE}
+    WHERE group_name = '{TEST_GROUP}'
+    ORDER BY target_table
+""")
+
+print(f"✓ Found {config_check.count()} config entries for group '{TEST_GROUP}'")
+display(config_check)
+
+# COMMAND ----------
+
+# DBTITLE 1,Insert into serving_ingestion_metadata - Products Batch 1
+print(f"Inserting products metadata for {BATCH_1}...")
+
+# Get file info
+products_b1_files = dbutils.fs.ls(products_batch1_path)
+orc_files_b1 = [f for f in products_b1_files if f.path.endswith('.orc')]
+
+for file_info in orc_files_b1:
+    metadata_insert = f"""
+    INSERT INTO {constants.INGESTION_METADATA_TABLE}
+    (
+        table_name,
         batch_load_id,
+        source_file_path,
+        file_modification_time,
+        file_size,
+        is_processed,
+        insert_ts,
+        last_update_ts
+    )
+    VALUES (
+        '{target_products_table}',
+        '{BATCH_1}',
+        '{file_info.path}',
+        current_timestamp(),
+        {file_info.size},
+        'N',
+        current_timestamp(),
+        current_timestamp()
+    )
+    """
+    spark.sql(metadata_insert)
+
+print(f"✓ Inserted {len(orc_files_b1)} file(s) for products {BATCH_1}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Insert into serving_ingestion_metadata - Products Batch 2
+print(f"Inserting products metadata for {BATCH_2}...")
+
+# Get file info
+products_b2_files = dbutils.fs.ls(products_batch2_path)
+orc_files_b2 = [f for f in products_b2_files if f.path.endswith('.orc')]
+
+for file_info in orc_files_b2:
+    metadata_insert = f"""
+    INSERT INTO {constants.INGESTION_METADATA_TABLE}
+    (
+        table_name,
+        batch_load_id,
+        source_file_path,
+        file_modification_time,
+        file_size,
+        is_processed,
+        insert_ts,
+        last_update_ts
+    )
+    VALUES (
+        '{target_products_table}',
+        '{BATCH_2}',
+        '{file_info.path}',
+        current_timestamp(),
+        {file_info.size},
+        'N',
+        current_timestamp(),
+        current_timestamp()
+    )
+    """
+    spark.sql(metadata_insert)
+
+print(f"✓ Inserted {len(orc_files_b2)} file(s) for products {BATCH_2}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Insert into serving_ingestion_metadata - Customers Batch 1
+print(f"Inserting customers metadata for {BATCH_1}...")
+
+# Get file info
+customers_b1_files = dbutils.fs.ls(customers_batch1_path)
+orc_files_b1_cust = [f for f in customers_b1_files if f.path.endswith('.orc')]
+
+for file_info in orc_files_b1_cust:
+    metadata_insert = f"""
+    INSERT INTO {constants.INGESTION_METADATA_TABLE}
+    (
+        table_name,
+        batch_load_id,
+        source_file_path,
+        file_modification_time,
+        file_size,
+        is_processed,
+        insert_ts,
+        last_update_ts
+    )
+    VALUES (
+        '{target_customers_table}',
+        '{BATCH_1}',
+        '{file_info.path}',
+        current_timestamp(),
+        {file_info.size},
+        'N',
+        current_timestamp(),
+        current_timestamp()
+    )
+    """
+    spark.sql(metadata_insert)
+
+print(f"✓ Inserted {len(orc_files_b1_cust)} file(s) for customers {BATCH_1}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Insert into serving_ingestion_metadata - Customers Batch 2
+print(f"Inserting customers metadata for {BATCH_2}...")
+
+# Get file info
+customers_b2_files = dbutils.fs.ls(customers_batch2_path)
+orc_files_b2_cust = [f for f in customers_b2_files if f.path.endswith('.orc')]
+
+for file_info in orc_files_b2_cust:
+    metadata_insert = f"""
+    INSERT INTO {constants.INGESTION_METADATA_TABLE}
+    (
+        table_name,
+        batch_load_id,
+        source_file_path,
+        file_modification_time,
+        file_size,
+        is_processed,
+        insert_ts,
+        last_update_ts
+    )
+    VALUES (
+        '{target_customers_table}',
+        '{BATCH_2}',
+        '{file_info.path}',
+        current_timestamp(),
+        {file_info.size},
+        'N',
+        current_timestamp(),
+        current_timestamp()
+    )
+    """
+    spark.sql(metadata_insert)
+
+print(f"✓ Inserted {len(orc_files_b2_cust)} file(s) for customers {BATCH_2}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Verify serving_ingestion_metadata entries
+print("Verifying serving_ingestion_metadata entries...")
+
+metadata_check = spark.sql(f"""
+    SELECT 
+        table_name,
+        batch_load_id,
+        source_file_path,
+        file_size,
+        is_processed
+    FROM {constants.INGESTION_METADATA_TABLE}
+    WHERE table_name IN ('{target_products_table}', '{target_customers_table}')
+    ORDER BY table_name, batch_load_id
+""")
+
+print(f"✓ Found {metadata_check.count()} metadata entries")
+display(metadata_check)
+
+# COMMAND ----------
+
+# DBTITLE 1,Insert into serving_ingestion_audit - Products Batch 1
+print(f"Inserting audit entry for products {BATCH_1}...")
+
+audit_insert = f"""
+INSERT INTO {constants.INGESTION_AUDIT_TABLE}
+(
+    run_id,
+    config_id,
+    batch_load_id,
+    group_name,
+    target_table_name,
+    operation_type,
+    load_type,
+    status,
+    start_ts,
+    end_ts,
+    row_count
+)
+VALUES (
+    'RUN_{BATCH_1}',
+    'CONFIG_PRODUCTS_001',
+    '{BATCH_1}',
+    '{TEST_GROUP}',
+    '{target_products_table}',
+    'LOAD',
+    'BATCH',
+    'COMPLETED',
+    current_timestamp(),
+    current_timestamp(),
+    {products_batch1_df.count()}
+)
+"""
+
+spark.sql(audit_insert)
+print(f"✓ Audit entry inserted for products {BATCH_1}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Insert into serving_ingestion_audit - Products Batch 2
+print(f"Inserting audit entry for products {BATCH_2}...")
+
+audit_insert = f"""
+INSERT INTO {constants.INGESTION_AUDIT_TABLE}
+(
+    run_id,
+    config_id,
+    batch_load_id,
+    group_name,
+    target_table_name,
+    operation_type,
+    load_type,
+    status,
+    start_ts,
+    end_ts,
+    row_count
+)
+VALUES (
+    'RUN_{BATCH_2}',
+    'CONFIG_PRODUCTS_001',
+    '{BATCH_2}',
+    '{TEST_GROUP}',
+    '{target_products_table}',
+    'LOAD',
+    'BATCH',
+    'COMPLETED',
+    current_timestamp(),
+    current_timestamp(),
+    {products_batch2_df.count()}
+)
+"""
+
+spark.sql(audit_insert)
+print(f"✓ Audit entry inserted for products {BATCH_2}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Insert into serving_ingestion_audit - Customers Batch 1
+print(f"Inserting audit entry for customers {BATCH_1}...")
+
+audit_insert = f"""
+INSERT INTO {constants.INGESTION_AUDIT_TABLE}
+(
+    run_id,
+    config_id,
+    batch_load_id,
+    group_name,
+    target_table_name,
+    operation_type,
+    load_type,
+    status,
+    start_ts,
+    end_ts,
+    row_count
+)
+VALUES (
+    'RUN_{BATCH_1}',
+    'CONFIG_CUSTOMERS_001',
+    '{BATCH_1}',
+    '{TEST_GROUP}',
+    '{target_customers_table}',
+    'LOAD',
+    'BATCH',
+    'COMPLETED',
+    current_timestamp(),
+    current_timestamp(),
+    {customers_batch1_df.count()}
+)
+"""
+
+spark.sql(audit_insert)
+print(f"✓ Audit entry inserted for customers {BATCH_1}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Insert into serving_ingestion_audit - Customers Batch 2
+print(f"Inserting audit entry for customers {BATCH_2}...")
+
+audit_insert = f"""
+INSERT INTO {constants.INGESTION_AUDIT_TABLE}
+(
+    run_id,
+    config_id,
+    batch_load_id,
+    group_name,
+    target_table_name,
+    operation_type,
+    load_type,
+    status,
+    start_ts,
+    end_ts,
+    row_count
+)
+VALUES (
+    'RUN_{BATCH_2}',
+    'CONFIG_CUSTOMERS_001',
+    '{BATCH_2}',
+    '{TEST_GROUP}',
+    '{target_customers_table}',
+    'LOAD',
+    'BATCH',
+    'COMPLETED',
+    current_timestamp(),
+    current_timestamp(),
+    {customers_batch2_df.count()}
+)
+"""
+
+spark.sql(audit_insert)
+print(f"✓ Audit entry inserted for customers {BATCH_2}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Verify serving_ingestion_audit entries
+print("Verifying serving_ingestion_audit entries...")
+
+audit_check = spark.sql(f"""
+    SELECT 
+        run_id,
+        batch_load_id,
+        group_name,
+        target_table_name,
+        operation_type,
+        load_type,
         status,
         row_count
     FROM {constants.INGESTION_AUDIT_TABLE}
-    WHERE group_name = '{TEST_CONFIG['table_group']}'
+    WHERE group_name = '{TEST_GROUP}'
     ORDER BY target_table_name, batch_load_id
 """)
-display(batch_df)
+
+print(f"✓ Found {audit_check.count()} audit entries for group '{TEST_GROUP}'")
+display(audit_check)
 
 # COMMAND ----------
 
-# DBTITLE 1,Test Environment Ready - Next Steps
+# DBTITLE 1,Setup Summary
+print("=" * 80)
+print("SETUP COMPLETE - SUMMARY")
+print("=" * 80)
+print(f"\n📋 Test Group: {TEST_GROUP}")
+print(f"\n✅ Tables Created:")
+print(f"   1. {target_products_table} ({spark.table(target_products_table).count()} rows)")
+print(f"   2. {target_customers_table} ({spark.table(target_customers_table).count()} rows)")
 
-print("\n" + "="*80)
-print("TEST ENVIRONMENT SETUP COMPLETE!")
-print("="*80)
+print(f"\n✅ Batches Created:")
+print(f"   Batch 1: {BATCH_1}")
+print(f"   Batch 2: {BATCH_2}")
 
-print("\n✅ What was created:")
-print(f"  • 2 schemas: {TEST_CONFIG['test_schema']} (target), {TEST_CONFIG['source_schema']} (source)")
-print(f"  • 6 tables: 3 source + 3 target tables")
-print(f"  • {len(orc_file_metadata)} ORC files in {TEST_CONFIG['test_dbfs_path']}")
-print(f"  • {config_count} ingestion config records")
-print(f"  • {audit_count} ingestion audit records")
-print(f"  • {metadata_count} ingestion metadata records")
+print(f"\n✅ Source Files Created:")
+print(f"   Products: {PRODUCTS_PATH}")
+print(f"   Customers: {CUSTOMERS_PATH}")
 
-print("\n📊 Test Scenarios Created:")
-for table_info in TEST_CONFIG['tables']:
-    print(f"  • {table_info['name'].upper()}: {table_info['scenario']} - {table_info['description']}")
+print(f"\n✅ Metadata Tables Populated:")
+print(f"   - {constants.INGESTION_CONFIG_TABLE}")
+print(f"   - {constants.INGESTION_METADATA_TABLE}")
+print(f"   - {constants.INGESTION_AUDIT_TABLE}")
 
-print("\n🚀 Next Steps:")
-print("  1. Run: notebooks/setup/02_setup_validation_mapping.py")
-print("     - This will populate the validation_mapping table from ingestion_config")
-print()
-print("  2. Create validation jobs manually:")
-print(f"     - Table Group: {TEST_CONFIG['table_group']}")
-print(f"     - Use job_utils/validation_job_config.yml as reference")
-print()
-print("  3. Run validation job to test:")
-print("     - Metrics collection")
-print("     - All validators (row count, schema, PK, data reconciliation)")
-print("     - Batch-level auditing")
-print()
-print("  4. Check validation results in:")
-print(f"     - {constants.VALIDATION_LOG_TABLE}")
-print(f"     - {constants.VALIDATION_SUMMARY_TABLE}")
+print(f"\n📊 Expected Validation Results:")
+print(f"   - 2 tables to validate")
+print(f"   - 2 batches per table")
+print(f"   - 4 validation runs total")
 
-print("\n" + "="*80)
-print("TEST CONFIGURATION SUMMARY")
-print("="*80)
-print(f"Table Group: {TEST_CONFIG['table_group']}")
-print(f"Target Schema: {TEST_CONFIG['test_catalog']}.{TEST_CONFIG['test_schema']}")
-print(f"Source Schema: {TEST_CONFIG['test_catalog']}.{TEST_CONFIG['source_schema']}")
-print(f"DBFS Location: {TEST_CONFIG['test_dbfs_path']}")
-print(f"Number of Batches: {len(TEST_CONFIG['batches'])}")
-print(f"Total Records: {sum([b['row_count'] for b in TEST_CONFIG['batches']]) * len(TEST_CONFIG['tables'])}")
-print("="*80)
+print(f"\n🔍 Quick Validation Check:")
+metadata_summary = spark.sql(f"""
+    SELECT 
+        table_name,
+        batch_load_id,
+        COUNT(*) as file_count,
+        is_processed
+    FROM {constants.INGESTION_METADATA_TABLE}
+    WHERE table_name IN ('{target_products_table}', '{target_customers_table}')
+    GROUP BY table_name, batch_load_id, is_processed
+    ORDER BY table_name, batch_load_id
+""")
+display(metadata_summary)
 
-# COMMAND ----------
-
-# DBTITLE 1,Quick Test Query - Validate Setup
-
-print("\n--- Quick Validation Query ---")
-print("Checking if framework can find unprocessed batches...")
-
-test_query = f"""
-SELECT 
-    t1.table_name,
-    t2.batch_load_id,
-    COUNT(t1.source_file_path) as orc_file_count,
-    t2.row_count as expected_rows
-FROM {constants.INGESTION_METADATA_TABLE} t1
-INNER JOIN {constants.INGESTION_AUDIT_TABLE} t2
-    ON (t1.table_name = t2.target_table_name 
-        AND t1.batch_load_id = t2.batch_load_id)
-INNER JOIN {constants.INGESTION_CONFIG_TABLE} t4
-    ON t1.table_name = concat_ws('.', t4.target_catalog, t4.target_schema, t4.target_table)
-WHERE t2.status = 'COMPLETED'
-    AND t4.group_name = '{TEST_CONFIG['table_group']}'
-GROUP BY t1.table_name, t2.batch_load_id, t2.row_count
-ORDER BY t1.table_name, t2.batch_load_id
-"""
-
-result_df = spark.sql(test_query)
-print("\n✓ Batches ready for validation:")
-display(result_df)
-
-expected_batch_count = len(TEST_CONFIG['tables']) * len(TEST_CONFIG['batches'])
-actual_batch_count = result_df.count()
-
-if actual_batch_count == expected_batch_count:
-    print(f"\n✅ SUCCESS: Found {actual_batch_count} batches ready for validation (expected: {expected_batch_count})")
-else:
-    print(f"\n⚠️ WARNING: Found {actual_batch_count} batches, expected {expected_batch_count}")
+print(f"\n🎯 Next Steps:")
+print(f"   1. Run: notebooks/setup/02_setup_validation_mapping.py")
+print(f"      This will create validation_mapping entries for '{TEST_GROUP}'")
+print(f"")
+print(f"   2. Create validation job manually or using job_utils")
+print(f"")
+print(f"   3. Run the validation job to test the framework")
+print(f"")
+print(f"   4. Check results in:")
+print(f"      - {constants.VALIDATION_LOG_TABLE}")
+print(f"      - {constants.VALIDATION_SUMMARY_TABLE}")
+print("=" * 80)
 
 # COMMAND ----------
 
-# DBTITLE 1,Sample Data Preview
+# DBTITLE 1,Test Data Preview
+print("TEST DATA PREVIEW")
+print("-" * 80)
 
-print("\n--- Sample Data Preview ---")
+print("\n📦 Products Sample:")
+display(spark.table(target_products_table).limit(5))
 
-for table_info in TEST_CONFIG['tables']:
-    table_name = table_info['name']
-    source_table = f"{TEST_CONFIG['test_catalog']}.{TEST_CONFIG['source_schema']}.{table_name}"
-    
-    print(f"\n{table_name.upper()} (first 5 records from source):")
-    sample_df = spark.table(source_table).limit(5)
-    display(sample_df)
+print("\n👥 Customers Sample:")
+display(spark.table(target_customers_table).limit(5))
 
-print("\n✅ Test setup complete! Ready for validation testing.")
+print("\n📁 Files by Batch:")
+files_by_batch = spark.sql(f"""
+    SELECT 
+        CASE 
+            WHEN table_name LIKE '%products' THEN 'Products'
+            WHEN table_name LIKE '%customers' THEN 'Customers'
+        END as table,
+        batch_load_id,
+        COUNT(*) as file_count
+    FROM {constants.INGESTION_METADATA_TABLE}
+    WHERE table_name IN ('{target_products_table}', '{target_customers_table}')
+    GROUP BY table_name, batch_load_id
+    ORDER BY table, batch_load_id
+""")
+display(files_by_batch)
+
+# COMMAND ----------
 

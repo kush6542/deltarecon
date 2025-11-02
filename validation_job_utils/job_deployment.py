@@ -12,6 +12,7 @@
 
 # DBTITLE 1,Widgets
 dbutils.widgets.text("config_file_path","")
+dbutils.widgets.dropdown("dry_run","N",["Y","N"])
 
 # COMMAND ----------
 
@@ -32,6 +33,7 @@ from pathlib import Path
 # DBTITLE 1,Load Configuration
 config_file_path = dbutils.widgets.get("config_file_path")
 config_file_path = config_file_path.strip()
+dry_run = dbutils.widgets.get("dry_run").strip().upper() == "Y"
 
 if config_file_path == '':
     config_file_path = './validation_job_config.yml'
@@ -48,7 +50,10 @@ with open(config_file_path) as stream:
 
 # Extract global config (everything except 'jobs' key)
 global_config = {k: v for k, v in d_config.items() if k != 'jobs'}
-pprint("Global Configuration:")
+print("="*80)
+print(f"DRY RUN MODE: {'ENABLED' if dry_run else 'DISABLED'}")
+print("="*80)
+print("\nGlobal Configuration:")
 pprint(global_config)
 
 jobs = d_config.get('jobs', [])
@@ -112,6 +117,9 @@ def update_permissions(job_id, d_permissions: Dict[str, str]):
 # COMMAND ----------
 
 # DBTITLE 1,Cluster and Task Templates
+# NOTE: instance_pool_id and driver_instance_pool_id are conditionally added below
+# Only uncomment them in YAML if your policy does NOT define instance pools
+# If policy defines them, leave commented to avoid validation errors
 cluster_template = """
 {
   "job_cluster_key": "{cluster_name}",
@@ -121,13 +129,10 @@ cluster_template = """
       "spark_env_vars": {
           "PYSPARK_PYTHON": "/databricks/python3/bin/python3",
       },
-      "instance_pool_id": "{instance_pool_id}",
       "policy_id": "{policy_id}",
-      "driver_instance_pool_id": "{driver_instance_pool_id}",
       "data_security_mode": "USER_ISOLATION",
       "runtime_engine": "STANDARD",
       "kind": "CLASSIC_PREVIEW",
-      "is_single_node": False,
       "autoscale": {
           "min_workers": {min_workers},
           "max_workers": {max_workers},
@@ -159,12 +164,26 @@ def get_cluster(cluster_name: str,
                 spark_conf: Dict[str, str] = None
                 ):
     cluster = cluster_template.replace("{cluster_name}", cluster_name)
-    cluster = cluster.replace("{instance_pool_id}", instance_pool_id)
     cluster = cluster.replace("{policy_id}", policy_id)
-    cluster = cluster.replace("{driver_instance_pool_id}", driver_instance_pool_id)
     cluster = cluster.replace("{min_workers}", str(min_workers))
     cluster = cluster.replace("{max_workers}", str(max_workers))
     d_cluster = eval(cluster)
+    
+    # Conditionally add instance pools only if provided in YAML config
+    # Leave these commented in YAML if your policy already defines instance pools
+    # Uncomment in YAML only if policy does NOT define them
+    if instance_pool_id and str(instance_pool_id).strip():
+        d_cluster["new_cluster"]["instance_pool_id"] = instance_pool_id
+        print(f"  Using instance_pool_id: {instance_pool_id}")
+    # else:
+    #     print(f"  instance_pool_id not specified - using policy default")
+    
+    if driver_instance_pool_id and str(driver_instance_pool_id).strip():
+        d_cluster["new_cluster"]["driver_instance_pool_id"] = driver_instance_pool_id
+        print(f"  Using driver_instance_pool_id: {driver_instance_pool_id}")
+    # else:
+    #     print(f"  driver_instance_pool_id not specified - using policy default")
+    
     if custom_tags:
         d_cluster["new_cluster"]["custom_tags"] = custom_tags
     if spark_conf:
@@ -219,7 +238,13 @@ def check_if_job_exists(job_name: str):
         print(e)
         return None
 
-def create_job(job_name: str, job_attribs: Dict[str, Any]):
+def create_job(job_name: str, job_attribs: Dict[str, Any], dry_run: bool = False):
+    if dry_run:
+        print(f"[DRY RUN] Would create/update job: {job_name}")
+        print("[DRY RUN] Job configuration:")
+        pprint(job_attribs)
+        return None
+    
     jb = Job.from_dict(job_attribs)
     job_id = check_if_job_exists(job_name)
     if job_id:
@@ -234,7 +259,7 @@ def create_job(job_name: str, job_attribs: Dict[str, Any]):
 # COMMAND ----------
 
 # DBTITLE 1,Job Creation Function
-def create_job_from_config(job_name, job_config):
+def create_job_from_config(job_name, job_config, dry_run=False):
     notebook_path = elem_config.get('notebook_path')
     job_parameters = elem_config.get('job_parameters')
     driver_instance_pool_id = elem_config.get('driver_instance_pool_id')
@@ -311,21 +336,34 @@ def create_job_from_config(job_name, job_config):
         d_job["tags"] = tags
     d_job["queue"]["enabled"] = queue_enabled
     # pprint(d_job)
-    job_id = create_job(job_name, d_job)
+    job_id = create_job(job_name, d_job, dry_run)
     # print(f"Job id: {job_id}")
-    d_permissions = elem_config.get('permissions')
-    if d_permissions:
-        try:
-            update_permissions(job_id, d_permissions)
-        except Exception as e:
-            print(f"Error encountered while updating permissions for job_name: {job_name}, permissions:{d_permissions}")
-            print(e)
+    
+    if not dry_run and job_id:
+        d_permissions = elem_config.get('permissions')
+        if d_permissions:
+            try:
+                update_permissions(job_id, d_permissions)
+            except Exception as e:
+                print(f"Error encountered while updating permissions for job_name: {job_name}, permissions:{d_permissions}")
+                print(e)
 
 # COMMAND ----------
 
 # DBTITLE 1,Process All Jobs
+print("\n" + "="*80)
+print("PROCESSING JOBS")
+print("="*80)
+
 for job_config in jobs:
     elem_config = deepcopy(global_config)
     elem_config.update(job_config)
     job_name = elem_config.get('job_name')
-    create_job_from_config(job_name, elem_config)
+    print(f"\n{'='*80}")
+    print(f"Job: {job_name}")
+    print(f"{'='*80}")
+    create_job_from_config(job_name, elem_config, dry_run)
+
+print("\n" + "="*80)
+print("DEPLOYMENT COMPLETE")
+print("="*80)

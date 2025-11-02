@@ -5,6 +5,34 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Check and Install SDK
+# Ensure databricks-sdk version is compatible (>= 0.30.0)
+# Uncomment the lines below if you need to install/upgrade the SDK
+
+# %pip install --quiet databricks-sdk>=0.30.0
+# dbutils.library.restartPython()
+
+# COMMAND ----------
+
+# DBTITLE 1,Verify SDK Version
+import databricks.sdk
+print(f"Databricks SDK Version: {databricks.sdk.__version__}")
+print("Required: >= 0.30.0")
+print("Recommended: >= 0.49.0")
+
+# Check version
+from packaging import version
+current_version = version.parse(databricks.sdk.__version__)
+required_version = version.parse("0.30.0")
+
+if current_version < required_version:
+    print(f"\n⚠️ WARNING: SDK version {databricks.sdk.__version__} is too old!")
+    print("Please uncomment the installation cell above and re-run the notebook.")
+else:
+    print(f"\n✅ SDK version is compatible")
+
+# COMMAND ----------
+
 # DBTITLE 1,Widgets
 dbutils.widgets.text("config_file_path", "")
 dbutils.widgets.dropdown("dry_run", "Y", ["Y", "N"])
@@ -15,6 +43,8 @@ dbutils.widgets.dropdown("dry_run", "Y", ["Y", "N"])
 from databricks.sdk.service.jobs import JobSettings as Job
 from databricks.sdk.service import jobs as jobs_svc
 from databricks.sdk.service.jobs import JobAccessControlRequest, JobPermissionLevel
+from databricks.sdk.service.jobs import Task, NotebookTask, JobCluster, CronSchedule
+from databricks.sdk.service.compute import ClusterSpec, AutoScale
 from databricks.sdk.service import iam
 from typing import Dict, Any
 from databricks.sdk import WorkspaceClient
@@ -165,32 +195,40 @@ def get_cluster(cluster_name: str,
                 max_workers: int,
                 custom_tags: Dict[str, str] = None,
                 spark_conf: Dict[str, str] = None):
-    """Build cluster configuration"""
-    cluster = cluster_template.replace("{cluster_name}", cluster_name)
-    cluster = cluster.replace("{instance_pool_id}", instance_pool_id)
-    cluster = cluster.replace("{policy_id}", policy_id)
-    cluster = cluster.replace("{driver_instance_pool_id}", driver_instance_pool_id)
-    cluster = cluster.replace("{min_workers}", str(min_workers))
-    cluster = cluster.replace("{max_workers}", str(max_workers))
-    d_cluster = eval(cluster)
-    if custom_tags:
-        d_cluster["new_cluster"]["custom_tags"] = custom_tags
-    if spark_conf:
-        d_cluster["new_cluster"]["spark_conf"] = spark_conf
-    return d_cluster
+    """Build cluster configuration using SDK objects"""
+    cluster_spec = ClusterSpec(
+        spark_version="16.4.x-scala2.12",
+        spark_env_vars={"PYSPARK_PYTHON": "/databricks/python3/bin/python3"},
+        instance_pool_id=instance_pool_id,
+        policy_id=policy_id,
+        driver_instance_pool_id=driver_instance_pool_id,
+        data_security_mode="USER_ISOLATION",
+        autoscale=AutoScale(min_workers=min_workers, max_workers=max_workers),
+        custom_tags=custom_tags,
+        spark_conf=spark_conf
+    )
+    
+    return JobCluster(
+        job_cluster_key=cluster_name,
+        new_cluster=cluster_spec
+    )
 
 def get_task(job_name: str,
              cluster_name: str,
              notebook_path: str,
              job_parameters: Dict[str, Any]):
-    """Build task configuration"""
-    task = task_template.replace("{job_name}", job_name)
-    task = task.replace("{notebook_path}", notebook_path)
-    task = task.replace("{cluster_name}", cluster_name)
-    d_task = eval(task)
-    if job_parameters:
-        d_task["notebook_task"]["base_parameters"] = job_parameters
-    return d_task
+    """Build task configuration using SDK objects"""
+    notebook_task = NotebookTask(
+        notebook_path=notebook_path,
+        source="WORKSPACE",
+        base_parameters=job_parameters if job_parameters else None
+    )
+    
+    return Task(
+        task_key=job_name,
+        notebook_task=notebook_task,
+        job_cluster_key=cluster_name
+    )
 
 def get_job_parameters(job_parameters: Dict[str, str]):
     """Convert job parameters to list format"""
@@ -203,12 +241,15 @@ def get_job_parameters(job_parameters: Dict[str, str]):
     return l_params
 
 def get_schedule(cron_expression: str, paused_status: str = "PAUSED"):
-    """Build schedule configuration"""
-    return {
-        "quartz_cron_expression": cron_expression,
-        "timezone_id": "Asia/Kolkata",
-        "pause_status": paused_status,
-    }
+    """Build schedule configuration using SDK objects"""
+    from databricks.sdk.service.jobs import PauseStatus
+    pause_enum = PauseStatus.PAUSED if paused_status == "PAUSED" else PauseStatus.UNPAUSED
+    
+    return CronSchedule(
+        quartz_cron_expression=cron_expression,
+        timezone_id="Asia/Kolkata",
+        pause_status=pause_enum
+    )
 
 def check_if_job_exists(job_name: str):
     """Check if a job with given name exists"""
@@ -237,7 +278,7 @@ def create_job(job_name: str, job_attribs: Dict[str, Any], dry_run: bool = False
         w.jobs.reset(new_settings=jb, job_id=job_id)
     else:
         print(f"  Creating new job: {job_name}")
-        # For creation, pass dict directly - SDK will handle conversion
+        # For creation, pass objects directly - SDK will handle serialization
         created_job = w.jobs.create(
             name=job_attribs["name"],
             tasks=job_attribs["tasks"],
@@ -250,8 +291,7 @@ def create_job(job_name: str, job_attribs: Dict[str, Any], dry_run: bool = False
             health=job_attribs.get("health"),
             tags=job_attribs.get("tags"),
             queue=job_attribs.get("queue"),
-            run_as=job_attribs.get("run_as"),
-            format=jobs_svc.Format.MULTI_TASK
+            run_as=job_attribs.get("run_as")
         )
         job_id = created_job.job_id
     return job_id

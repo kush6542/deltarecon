@@ -264,6 +264,8 @@ print("\n--- Generating ORDERS data (Perfect Match) ---")
 
 def generate_orders_data(batch_config):
     """Generate orders data for a batch"""
+    from decimal import Decimal
+    
     batch_id = batch_config['batch_id']
     row_count = batch_config['row_count']
     
@@ -276,11 +278,14 @@ def generate_orders_data(batch_config):
     
     for i in range(row_count):
         order_id = base_order_id + i
+        # Use Python's Decimal to match table's DECIMAL(10,2) type
+        order_amount = Decimal(str(random.uniform(10.0, 1000.0))).quantize(Decimal('0.01'))
+        
         orders_data.append({
             'order_id': order_id,
             'customer_id': random.randint(1, 50),
             'order_date': (datetime.now() - timedelta(days=random.randint(0, 365))).date(),
-            'order_amount': round(random.uniform(10.0, 1000.0), 2),
+            'order_amount': order_amount,
             'order_status': random.choice(['PENDING', 'COMPLETED', 'SHIPPED', 'DELIVERED', 'CANCELLED']),
             'product_category': random.choice(['Electronics', 'Clothing', 'Home', 'Sports', 'Books']),
             'shipping_city': random.choice(['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix']),
@@ -388,6 +393,8 @@ print("\n--- Generating PRODUCTS data (Data Mismatch) ---")
 
 def generate_products_data(batch_config, introduce_mismatch=False):
     """Generate products data for a batch"""
+    from decimal import Decimal
+    
     batch_id = batch_config['batch_id']
     row_count = batch_config['row_count']
     
@@ -400,12 +407,15 @@ def generate_products_data(batch_config, introduce_mismatch=False):
     for i in range(row_count):
         product_id = base_product_id + i
         
+        # Use Decimal to match table's DECIMAL(10,2) type
+        price = Decimal(str(random.uniform(5.0, 500.0))).quantize(Decimal('0.01'))
+        
         # Base product data
         product = {
             'product_id': product_id,
             'product_name': f'Product_{product_id}',
             'category': random.choice(['Electronics', 'Clothing', 'Home', 'Sports', 'Books']),
-            'price': round(random.uniform(5.0, 500.0), 2),
+            'price': price,
             'stock_quantity': random.randint(0, 1000),
             'supplier_id': random.randint(1, 20),
             'is_active': random.choice([True, False]),
@@ -415,7 +425,9 @@ def generate_products_data(batch_config, introduce_mismatch=False):
         
         # Introduce mismatches in ~10% of records for target
         if introduce_mismatch and i % 10 == 0:
-            product['price'] = round(product['price'] * 1.1, 2)  # 10% price difference
+            # Use Decimal for price adjustment too
+            adjusted_price = price * Decimal('1.1')
+            product['price'] = adjusted_price.quantize(Decimal('0.01'))
             product['stock_quantity'] = product['stock_quantity'] + 10  # Stock difference
         
         products_data.append(product)

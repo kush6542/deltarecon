@@ -53,5 +53,5 @@ VALIDATION_USER_NAME = "lightweight_deltarecon"
 VALIDATION_USER_EMAIL = "kushagra.parashar@databricks.com"
 
 # Job naming configuration
-JOB_NAME_PREFIX = "validation_job"  # Prefix for job names. Final format: {JOB_NAME_PREFIX}_{table_group}
+JOB_NAME_PREFIX = "validation_job"  # Prefix for job names. Change in validation_job_config.yml also if you change this.
 

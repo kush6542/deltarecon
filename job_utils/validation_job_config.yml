@@ -33,7 +33,7 @@ permissions:
   can_view: group:analysts
 
 
-# Individual job configs
+# Individual job configs 
 jobs:
   - job_name: validation_job_<table_group_name>
     notebook_path: '/Workspace/Users/user.name@company.com/deltarecon/notebooks/main' # Replace with path to main.py
@@ -68,7 +68,7 @@ jobs:
       # The job parameters are MANDATORY for the job to run
       table_group: <table_group_name>
       iteration_suffix: daily
-      isFullValidation: "false" # True does hash based recon, expensive !
+      isFullValidation: "false" # True does hash based recon, which is expensive 
     min_workers: 4
     max_workers: 8
     spark_conf:

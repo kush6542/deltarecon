@@ -319,9 +319,4 @@ For issues and questions:
 - Open an issue on GitHub
 - Contact: kushagra.parashar@databricks.com
 
----
-
-## Acknowledgments
-
-Built with ❤️ for robust data validation on Databricks
 

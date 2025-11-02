@@ -237,15 +237,23 @@ def create_job(job_name: str, job_attribs: Dict[str, Any], dry_run: bool = False
         w.jobs.reset(new_settings=jb, job_id=job_id)
     else:
         print(f"  Creating new job: {job_name}")
-        jb = Job.from_dict(job_attribs)
-        try:
-            # Try as_shallow_dict() for newer SDK versions
-            created_job = w.jobs.create(**jb.as_shallow_dict())
-            job_id = created_job.job_id
-        except AttributeError:
-            # Fallback for older SDK versions
-            created_job = w.jobs.create(**job_attribs)
-            job_id = created_job.job_id
+        # For creation, pass dict directly - SDK will handle conversion
+        created_job = w.jobs.create(
+            name=job_attribs["name"],
+            tasks=job_attribs["tasks"],
+            job_clusters=job_attribs["job_clusters"],
+            schedule=job_attrigit bs.get("schedule"),
+            max_concurrent_runs=job_attribs.get("max_concurrent_runs"),
+            timeout_seconds=job_attribs.get("timeout_seconds"),
+            email_notifications=job_attribs.get("email_notifications"),
+            parameters=job_attribs.get("parameters"),
+            health=job_attribs.get("health"),
+            tags=job_attribs.get("tags"),
+            queue=job_attribs.get("queue"),
+            run_as=job_attribs.get("run_as"),
+            format=jobs_svc.Format.MULTI_TASK
+        )
+        job_id = created_job.job_id
     return job_id
 
 # COMMAND ----------

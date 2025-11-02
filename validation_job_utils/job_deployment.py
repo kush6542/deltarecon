@@ -11,7 +11,6 @@
 # COMMAND ----------
 
 # DBTITLE 1,Widgets
-dbutils.widgets.dropdown("env","sandbox",["sandbox","prod"])
 dbutils.widgets.text("config_file_path","")
 
 # COMMAND ----------
@@ -31,7 +30,6 @@ from pathlib import Path
 # COMMAND ----------
 
 # DBTITLE 1,Load Configuration
-env = dbutils.widgets.get("env")
 config_file_path = dbutils.widgets.get("config_file_path")
 config_file_path = config_file_path.strip()
 
@@ -48,10 +46,13 @@ with open(config_file_path) as stream:
     except yaml.YAMLError as exc:
         raise
 
-env_config = d_config.get(env)
-pprint(env_config)
+# Extract global config (everything except 'jobs' key)
+global_config = {k: v for k, v in d_config.items() if k != 'jobs'}
+pprint("Global Configuration:")
+pprint(global_config)
 
-jobs = d_config.get('jobs')
+jobs = d_config.get('jobs', [])
+print(f"\nNumber of jobs to deploy: {len(jobs)}")
 pprint(jobs)
 
 w = WorkspaceClient()
@@ -324,7 +325,7 @@ def create_job_from_config(job_name, job_config):
 
 # DBTITLE 1,Process All Jobs
 for job_config in jobs:
-    elem_config = deepcopy(env_config)
+    elem_config = deepcopy(global_config)
     elem_config.update(job_config)
     job_name = elem_config.get('job_name')
     create_job_from_config(job_name, elem_config)

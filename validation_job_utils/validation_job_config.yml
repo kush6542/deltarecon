@@ -8,6 +8,10 @@ cluster_tags:
   managed_by: validation_framework
   framework: deltarecon
   purpose: data_validation
+
+job_tags:
+  managed_by: validation_framework
+
 timeout_seconds: 7200
 warning_threshold_seconds: 3600
 permissions:
@@ -16,7 +20,7 @@ permissions:
   can_view: group:analysts
 
 jobs:
-  - job_name: validation_group1_basic
+  - job_name: validation_<group_name_from_config>
     notebook_path: '/Workspace/Users/your-email@example.com/deltarecon/notebooks/main'
     schedule: null
     job_parameters:
@@ -36,6 +40,7 @@ jobs:
     is_queue_enabled: false
     pause_schedule: false
     tags:
+      managed_by: validation_framework
       table_group: group1_basic
       validation_type: basic
       environment: test
@@ -62,6 +67,7 @@ jobs:
     is_queue_enabled: true
     pause_schedule: false
     tags:
+      managed_by: validation_framework
       table_group: group2_advanced
       validation_type: comprehensive
       environment: test

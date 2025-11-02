@@ -293,10 +293,13 @@ def create_job_from_config(job_config: Dict[str, Any], global_config: Dict[str, 
     max_concurrent_runs = elem_config.get('max_concurrent_runs', 1)
     queue_enabled = elem_config.get('is_queue_enabled', True)
     
-    tags = elem_config.get('tags', {})
-    if not isinstance(tags, dict):
+    # Merge global job_tags with job-specific tags
+    tags = deepcopy(global_config.get('job_tags', {}))
+    job_specific_tags = elem_config.get('tags', {})
+    if isinstance(job_specific_tags, dict):
+        tags.update(job_specific_tags)
+    elif job_specific_tags:
         print("  Warning: tags is not in Dict[str,str] format")
-        tags = {}
     
     d_job = {
         "name": job_name,

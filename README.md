@@ -2,19 +2,46 @@
 
 **A robust data validation framework for Databricks**
 
-DeltaRecon validates the accuracy of data migrations by comparing source data (ORC files) against target data (Delta tables). It ensures data consistency, schema compliance, and primary key integrity across your data pipeline.
+DeltaRecon validates the accuracy of data migrations by comparing source data (ORC files) against target data (Delta tables). It ensures data consistency, schema compliance, and primary key integrity across your data pipeline with comprehensive batch-level auditing.
 
 ---
 
 ## Features
 
-✓ **Automated Batch Processing** - Identifies and validates unprocessed batches automatically  
+✓ **Batch-Level Auditing** - Each batch validated independently with complete audit trail  
 ✓ **Parallel Execution** - Processes multiple tables concurrently for faster validation  
-✓ **Double-Verification** - Critical metrics verified using multiple methods  
-✓ **Complete Audit Trail** - All validation results stored in Delta tables  
-✓ **Flexible Validators** - Row count, schema, and primary key validation  
-✓ **Error Recovery** - Graceful error handling with detailed logging  
-✓ **Production Ready** - Enterprise-grade code quality and standards  
+✓ **Multiple Validation Modes** - Quick validation or full data reconciliation  
+✓ **Complete Audit Trail** - All validation results stored in Delta tables per batch  
+✓ **Flexible Validators** - Row count, schema, primary key, and data reconciliation  
+✓ **Partial Success Model** - Graceful handling when some batches fail  
+✓ **Write Mode Awareness** - Smart handling of append vs overwrite ingestion patterns  
+✓ **Production Ready** - Enterprise-grade code quality and automated job deployment  
+
+---
+
+## What Makes DeltaRecon Different?
+
+### Batch-Level Auditing
+Unlike traditional table-level validation, DeltaRecon validates each batch independently:
+- **Granular tracking**: Separate audit record for each batch
+- **Partial success**: Some batches can pass while others fail
+- **Idempotency**: Re-run only failed batches, not entire tables
+- **Better debugging**: Pinpoint exactly which batch has issues
+
+### Intelligent Write Mode Handling
+- **Append Mode**: Validates all unprocessed batches incrementally
+- **Overwrite Mode**: Validates only the latest batch (historical validations become irrelevant)
+- Automatically determined from ingestion metadata
+
+### Flexible Validation Modes
+- **Quick Mode** (default): Row count, schema, and PK validation (~2-5 min per table)
+- **Full Mode** (`is_full_validation=True`): Adds hash-based data reconciliation (~5-15 min per table)
+
+### Production-Ready Architecture
+- Thread-safe parallel processing
+- Comprehensive error handling
+- Complete audit trail for compliance
+- Automated job deployment utilities
 
 ---
 
@@ -53,7 +80,7 @@ databricks bundle deploy -t prod
 
 ## Configuration
 
-Edit `config/constants.py` to set your environment:
+Edit `deltarecon/config/constants.py` to set your environment:
 
 ```python
 # Ingestion metadata tables (read from)
@@ -66,6 +93,8 @@ VALIDATION_SCHEMA = "your_validation_catalog.validation_schema"
 
 # Framework settings
 PARALLELISM = 5  # Number of tables to process in parallel
+FRAMEWORK_VERSION = "v1.0.0"
+BATCH_LEVEL_AUDITING = True  # Always enabled for granular tracking
 ```
 
 ---
@@ -104,11 +133,20 @@ SELECT * FROM your_catalog.your_schema.validation_mapping LIMIT 10;
 ```python
 from deltarecon import ValidationRunner
 
-# Create runner
+# Quick validation (row count, schema, PK only)
 runner = ValidationRunner(
     spark=spark,
     table_group="sales",
-    iteration_suffix="daily"
+    iteration_suffix="daily",
+    is_full_validation=False  # Default: faster
+)
+
+# Full validation (includes hash-based data reconciliation)
+runner = ValidationRunner(
+    spark=spark,
+    table_group="sales",
+    iteration_suffix="daily",
+    is_full_validation=True  # Slower but comprehensive
 )
 
 # Run validation
@@ -116,21 +154,24 @@ result = runner.run()
 
 # Check results
 print(f"Success: {result['success']}, Failed: {result['failed']}")
+print(f"Partial Success: {result.get('partial_success', 0)}")
 ```
 
 ### Running from Notebook
 
 Run: `notebooks/main.py` with parameters:
-- `table_group`: Name of table group to validate
-- `iteration_suffix`: Identifier for this run (e.g., "daily", "hourly")
+- `table_group`: Name of table group to validate (required)
+- `iteration_suffix`: Identifier for this run (default: "default")
+- `isFullValidation`: Enable full data reconciliation (default: "false")
 
 ### Querying Results
 
 ```sql
--- Recent validation runs
+-- Recent validation runs (batch-level)
 SELECT 
   iteration_name,
   table_family,
+  batch_load_id,
   validation_run_status,
   validation_run_start_time,
   validation_run_end_time
@@ -138,17 +179,70 @@ FROM validation_log
 ORDER BY validation_run_start_time DESC
 LIMIT 10;
 
--- Validation summary with metrics
+-- Validation summary with metrics (per batch)
 SELECT 
+  batch_load_id,
   table_family,
   overall_status,
   row_count_match_status,
   schema_match_status,
   primary_key_compliance_status,
+  data_reconciliation_status,
   metrics.src_records,
   metrics.tgt_records
 FROM validation_summary
-WHERE iteration_name = 'daily_20250131_120000';
+WHERE iteration_name = 'daily_20241103_120000'
+ORDER BY table_family, batch_load_id;
+
+-- Table-level summary (aggregate batches)
+SELECT 
+  table_family,
+  COUNT(*) as total_batches,
+  SUM(CASE WHEN overall_status = 'SUCCESS' THEN 1 ELSE 0 END) as success_batches,
+  SUM(CASE WHEN overall_status = 'FAILED' THEN 1 ELSE 0 END) as failed_batches
+FROM validation_summary
+WHERE iteration_name = 'daily_20241103_120000'
+GROUP BY table_family;
+```
+
+### Monitoring and Alerts
+
+```sql
+-- Tables with partial success (some batches failed)
+SELECT 
+  vl.table_family,
+  COUNT(DISTINCT vl.batch_load_id) as total_batches,
+  SUM(CASE WHEN vl.validation_run_status = 'SUCCESS' THEN 1 ELSE 0 END) as success_count,
+  SUM(CASE WHEN vl.validation_run_status = 'FAILED' THEN 1 ELSE 0 END) as failed_count
+FROM validation_log vl
+WHERE vl.iteration_name = 'daily_20241103_120000'
+GROUP BY vl.table_family
+HAVING failed_count > 0 AND success_count > 0;
+
+-- Success rate by table over last 30 days
+SELECT 
+  table_family,
+  COUNT(*) as total_validations,
+  SUM(CASE WHEN validation_run_status = 'SUCCESS' THEN 1 ELSE 0 END) as successes,
+  ROUND(100.0 * SUM(CASE WHEN validation_run_status = 'SUCCESS' THEN 1 ELSE 0 END) / COUNT(*), 2) as success_rate_pct
+FROM validation_log
+WHERE validation_run_start_time >= CURRENT_DATE - INTERVAL 30 DAYS
+GROUP BY table_family
+ORDER BY success_rate_pct ASC;
+
+-- Unvalidated batches (candidates for next run)
+SELECT 
+  ia.batch_load_id,
+  ia.target_table_name,
+  ia.start_time as ingestion_time,
+  ia.status as ingestion_status,
+  vl.validation_run_status
+FROM serving_ingestion_audit ia
+LEFT JOIN validation_log vl 
+  ON ia.batch_load_id = vl.batch_load_id
+WHERE ia.status = 'COMPLETED'
+  AND (vl.validation_run_status IS NULL OR vl.validation_run_status = 'FAILED')
+ORDER BY ia.start_time DESC;
 ```
 
 ---
@@ -157,12 +251,13 @@ WHERE iteration_name = 'daily_20250131_120000';
 
 ```
 deltarecon/
-├── config/                  # Configuration
-│   ├── __init__.py
-│   └── constants.py
 ├── deltarecon/             # Main package
 │   ├── __init__.py
 │   ├── runner.py           # Main orchestrator
+│   ├── config/             # Configuration
+│   │   ├── __init__.py
+│   │   ├── constants.py
+│   │   └── constants_kushagra.py (example)
 │   ├── core/               # Core processing
 │   │   ├── batch_processor.py
 │   │   ├── ingestion_reader.py
@@ -173,16 +268,25 @@ deltarecon/
 │   │   ├── table_config.py
 │   │   └── validation_result.py
 │   ├── utils/              # Utilities
+│   │   ├── banner.py
 │   │   ├── exceptions.py
 │   │   └── logger.py
 │   └── validators/         # Validators
 │       ├── base_validator.py
+│       ├── data_reconciliation_validator.py
 │       ├── pk_validator.py
 │       ├── row_count_validator.py
 │       └── schema_validator.py
-└── notebooks/              # Notebooks
-    ├── main.py             # Entry point
-    └── setup/              # Setup notebooks
+├── notebooks/              # Notebooks
+│   ├── main.py             # Entry point
+│   └── setup/              # Setup notebooks
+│       ├── 01_create_tables.py
+│       └── 02_setup_validation_mapping.py
+├── job_utils/              # Job deployment utilities
+│   ├── job_deployment.py
+│   ├── pause_unpause_jobs.py
+│   └── validation_job_config.yml
+└── docs/                   # Documentation
 ```
 
 ---
@@ -193,18 +297,38 @@ deltarecon/
 1. Job starts with table_group parameter (e.g., "sales")
 2. Read configurations for all tables in group
 3. For each table (in parallel):
-   a. Identify unprocessed batches
-   b. Write log entry (IN_PROGRESS)
-   c. Load source ORC data
-   d. Load target Delta data
-   e. Run validators:
-      - Row count (with double-verification)
-      - Schema comparison  
-      - Primary key uniqueness
-   f. Write validation summary
-   g. Update log entry (SUCCESS/FAILED)
+   a. Identify unprocessed batches (considering write mode)
+   b. For each batch (batch-level auditing):
+      i.   Write log entry (IN_PROGRESS)
+      ii.  Load source ORC data for this batch
+      iii. Load target Delta data for this batch
+      iv.  Cache DataFrames for consistent snapshot
+      v.   Run validators:
+           - Row count comparison
+           - Schema compatibility
+           - Primary key uniqueness
+           - Data reconciliation (if is_full_validation=True)
+      vi.  Unpersist DataFrames
+      vii. Write validation summary
+      viii. Update log entry (SUCCESS/FAILED)
+   c. Determine table status:
+      - SUCCESS: All batches passed
+      - FAILED: All batches failed
+      - PARTIAL_SUCCESS: Some batches passed, some failed
 4. Return summary with results
 ```
+
+### Write Mode Handling
+
+**Append Mode:**
+- Validates ALL unprocessed COMPLETED batches
+- Each batch validated independently
+- Historical batches remain validated
+
+**Overwrite Mode:**
+- Validates ONLY the LATEST COMPLETED batch
+- Previous batch validations become irrelevant
+- Only latest data state matters
 
 ---
 
@@ -212,20 +336,34 @@ deltarecon/
 
 ### RowCountValidator
 - Compares source and target row counts
-- Double-verification using two independent methods
+- Fast and lightweight validation
 - Status: PASSED if counts match, FAILED otherwise
+- Always runs
 
 ### SchemaValidator
 - Compares column names and data types
 - Identifies missing/extra columns
 - Detects type mismatches
-- Excludes audit columns (`_aud_*`)
+- Excludes audit columns (`_aud_*`) and partition columns
+- Always runs
 
 ### PKValidator
-- Validates primary key uniqueness
+- Validates primary key uniqueness in target
 - Detects duplicate rows
 - Captures sample duplicates for investigation
 - Status: SKIPPED if no PK defined
+- Always runs
+
+### DataReconciliationValidator (Optional)
+- Full row-level hash-based data comparison
+- Compares all data columns (excludes partitions and audit columns)
+- Reports:
+  - `src_extras`: Records in source but not in target
+  - `tgt_extras`: Records in target but not in source
+  - `matches`: Identical records in both
+- Only runs when `is_full_validation=True`
+- Slower but provides comprehensive validation
+- Uses MD5 hash of concatenated column values
 
 ---
 
@@ -233,7 +371,7 @@ deltarecon/
 
 ### Import Errors
 
-If you get `ModuleNotFoundError: No module named 'config'`:
+If you get `ModuleNotFoundError: No module named 'deltarecon'`:
 
 **Using Repos:** Already handled automatically ✓
 
@@ -246,37 +384,131 @@ if workspace_root not in sys.path:
     sys.path.insert(0, workspace_root)
 ```
 
-See `WORKSPACE_UPLOAD_GUIDE.md` for details.
+See `docs/WORKSPACE_UPLOAD_GUIDE.md` for details.
 
 ### No Batches Found
 
 Check:
-1. Is `validation_mapping` populated?
+1. Is `validation_mapping` populated? 
+   ```sql
+   SELECT * FROM validation_mapping WHERE table_group = 'your_group';
+   ```
 2. Are there COMPLETED batches in `ingestion_audit`?
+   ```sql
+   SELECT * FROM serving_ingestion_audit WHERE status = 'COMPLETED';
+   ```
 3. Have the batches already been validated successfully?
+   ```sql
+   SELECT * FROM validation_log WHERE validation_run_status = 'SUCCESS';
+   ```
+4. For overwrite mode: Only the latest batch will be validated
 
 ### Validation Failures
 
 Check `validation_log` table for error details:
 ```sql
-SELECT * FROM validation_log 
+SELECT 
+  batch_load_id,
+  table_family,
+  validation_run_status,
+  exception,
+  validation_run_start_time
+FROM validation_log 
 WHERE validation_run_status = 'FAILED'
 ORDER BY validation_run_start_time DESC;
 ```
+
+### Partial Success
+
+When some batches pass and some fail:
+```sql
+-- See which batches failed for a table
+SELECT 
+  batch_load_id,
+  overall_status,
+  row_count_match_status,
+  schema_match_status,
+  primary_key_compliance_status
+FROM validation_summary
+WHERE table_family = 'your_table'
+  AND overall_status = 'FAILED';
+```
+
+### Performance Issues
+
+If validation is slow:
+1. Set `is_full_validation=False` for faster validation (50-80% faster)
+2. Increase cluster size (more workers)
+3. Increase `PARALLELISM` in `constants.py`
+4. Partition target tables by `_aud_batch_load_id` for better data skipping
+
+---
+
+## Job Deployment
+
+### Automated Deployment
+
+DeltaRecon includes utilities for automated job deployment:
+
+**1. Configure Jobs**
+
+Edit `job_utils/validation_job_config.yml`:
+
+```yaml
+jobs:
+  - job_name: "validation_job_sales"
+    table_group: "sales"
+    schedule: "0 0 6 * * ?"  # Daily at 6 AM
+    cluster_config:
+      node_type: "i3.xlarge"
+      num_workers: 2
+    parameters:
+      isFullValidation: "false"
+```
+
+**2. Deploy Jobs**
+
+```bash
+# Deploy all jobs defined in config
+python job_utils/job_deployment.py --config job_utils/validation_job_config.yml
+```
+
+This will:
+- Create/update Databricks jobs via REST API
+- Configure clusters and schedules
+- Set up email notifications (if specified)
+- Link to `notebooks/main.py` as the entry point
+
+**3. Manage Jobs**
+
+```bash
+# Pause all validation jobs
+python job_utils/pause_unpause_jobs.py --action pause
+
+# Resume all validation jobs
+python job_utils/pause_unpause_jobs.py --action unpause
+```
+
+See `docs/DEPLOYMENT_GUIDE.txt` for detailed deployment instructions.
 
 ---
 
 ## Development
 
-### Running Tests
+### Project Structure
 
-```bash
-# Install dependencies
-pip install -r requirements-dev.txt
+- **deltarecon/**: Main framework package
+- **notebooks/**: Entry points and setup scripts
+- **job_utils/**: Job deployment and management utilities
+- **docs/**: Comprehensive documentation
 
-# Run tests
-pytest tests/
-```
+### Key Design Principles
+
+1. **Batch-Level Auditing**: Each batch validated independently
+2. **Thread Safety**: Fresh component instances per thread
+3. **Idempotency**: Safe to re-run validations
+4. **Separation of Concerns**: Clear module boundaries
+5. **Graceful Degradation**: Partial success model
 
 ### Code Style
 
@@ -284,6 +516,31 @@ This project follows:
 - PEP 8 style guide
 - Type hints for function signatures
 - Comprehensive docstrings
+- Structured logging with context
+
+---
+
+## Documentation
+
+Comprehensive documentation is available in the `docs/` directory:
+
+- **DEPLOYMENT_GUIDE.txt**: Complete deployment and operational guide
+- **DESIGN_DOCUMENTATION.txt**: Detailed architecture and design decisions
+- **DEVELOPMENT_PLAN.md**: Development roadmap and planning
+- **BATCH_TEST_GUIDE.md**: Guide for batch-level testing
+- **TEST_FRAMEWORK_SUMMARY.md**: Testing framework overview
+- **FLOW_DIAGRAMS.md**: Visual workflow diagrams
+- **DATA_RECONCILIATION_IMPLEMENTATION.md**: Data reconciliation details
+- **BATCH_LEVEL_AUDITING_CHANGES.md**: Batch-level auditing implementation
+
+### Quick Reference
+
+Key concepts:
+- **Batch**: A logical grouping of data files loaded together
+- **Table Group**: Collection of related tables validated together
+- **Table Family**: Individual table within a group
+- **Iteration**: Single execution of validation workflow
+- **Write Mode**: Strategy for loading data (append or overwrite)
 
 ---
 
@@ -299,11 +556,17 @@ This project follows:
 
 ## Version History
 
-### v1.0.0 (Current)
-- Initial production release
-- Row count, schema, and PK validators
-- Parallel table processing
-- Complete audit trail
+### v1.0.0 (Current - November 2025)
+- **Batch-level auditing**: Each batch validated independently with dedicated audit records
+- **Multiple validation modes**: Quick validation (default) and full data reconciliation
+- **Four validators**: Row count, schema, primary key, and data reconciliation
+- **Write mode awareness**: Smart handling of append vs overwrite ingestion patterns
+- **Partial success model**: Graceful handling when some batches fail
+- **Parallel processing**: Table-level parallelism with configurable workers
+- **Automated job deployment**: Utilities for deploying and managing Databricks jobs
+- **Thread safety**: Fresh component instances per thread for safe parallel execution
+- **Complete documentation**: Comprehensive guides and design documentation
+- **Production ready**: Enterprise-grade logging, error handling, and audit trail
 
 ---
 

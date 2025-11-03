@@ -5,7 +5,13 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Install Required Packages
 # %pip install --upgrade databricks-sdk==0.49.0
+# %pip install pyyaml
+
+# COMMAND ----------
+
+# DBTITLE 1,Restart Python
 # %restart_python
 
 # COMMAND ----------

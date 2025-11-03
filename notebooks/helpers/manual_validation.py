@@ -1,12 +1,4 @@
 # Databricks notebook source
-# DBTITLE 1,Manual Validation Helper
-##########################################
-#  Manual Validation Helper              #
-#  @author: Data Migration Validator     #
-#                                        #
-#  Quick manual validation for a         #
-#  specific batch_load_id and table      #
-##########################################
 
 # COMMAND ----------
 
@@ -29,13 +21,38 @@
 
 # COMMAND ----------
 
-# MAGIC %run "../setup/constants"
-
-# COMMAND ----------
-
+# DBTITLE 1,Import Libraries and Configuration
+import sys
 import logging
 from pyspark.sql.functions import col, count, regexp_extract, md5, concat_ws, coalesce, lit
 from pyspark.sql.types import StructType
+
+# Add project root to Python path for imports
+import os
+notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+project_root = os.path.abspath(os.path.join(os.path.dirname(notebook_path), "../.."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Import constants from deltarecon config
+# NOTE: Modify the import below to use your constants file (constants.py or constants.py)
+try:
+    from deltarecon.config.constants import (
+        INGESTION_METADATA_TABLE,
+        INGESTION_AUDIT_TABLE,
+        INGESTION_CONFIG_TABLE,
+        VALIDATION_MAPPING_TABLE
+    )
+    print("✅ Loaded constants from: deltarecon.config.constants")
+except ImportError:
+    # Fallback to default constants.py
+    from deltarecon.config.constants import (
+        INGESTION_METADATA_TABLE,
+        INGESTION_AUDIT_TABLE,
+        INGESTION_CONFIG_TABLE,
+        VALIDATION_MAPPING_TABLE
+    )
+    print("✅ Loaded constants from: deltarecon.config.constants")
 
 # Setup logging
 logging.basicConfig(
@@ -44,6 +61,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+print(f"\n📋 Configuration loaded:")
+print(f"   INGESTION_METADATA_TABLE: {INGESTION_METADATA_TABLE}")
+print(f"   INGESTION_AUDIT_TABLE:    {INGESTION_AUDIT_TABLE}")
+print(f"   INGESTION_CONFIG_TABLE:   {INGESTION_CONFIG_TABLE}")
+print(f"   VALIDATION_MAPPING_TABLE: {VALIDATION_MAPPING_TABLE}")
 
 # COMMAND ----------
 

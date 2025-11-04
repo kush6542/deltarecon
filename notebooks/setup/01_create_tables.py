@@ -101,10 +101,59 @@ print(f"Created/verified: {constants.VALIDATION_SUMMARY_TABLE}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Grant Permissions to SPN
+# Check if SPN_ID is configured
+if not constants.SPN_ID:
+    print("WARNING: SPN_ID not configured in constants.py")
+    print("Please set constants.SPN_ID to grant permissions to the Service Principal")
+    print("Skipping permission grants...")
+else:
+    print(f"Granting permissions to SPN: {constants.SPN_ID}")
+    
+    # Grant permissions to the SPN for all validation tables
+    tables = [
+        constants.VALIDATION_MAPPING_TABLE,
+        constants.VALIDATION_LOG_TABLE,
+        constants.VALIDATION_SUMMARY_TABLE
+    ]
+    
+    for table in tables:
+        try:
+            # Grant SELECT and MODIFY permissions to allow read/write access
+            spark.sql(f"GRANT SELECT, MODIFY ON TABLE {table} TO `{constants.SPN_ID}`")
+            print(f"✓ Granted SELECT, MODIFY permissions on {table} to SPN {constants.SPN_ID}")
+        except Exception as e:
+            print(f" Warning: Could not grant permissions on {table}: {str(e)}")
+            print(f"  You may need to grant these permissions manually or ensure you have the right privileges")
+    
+    # Also grant permissions on the schema itself
+    try:
+        spark.sql(f"GRANT USAGE ON SCHEMA {constants.VALIDATION_SCHEMA} TO `{constants.SPN_ID}`")
+        print(f"✓ Granted USAGE permission on schema {constants.VALIDATION_SCHEMA} to SPN {constants.SPN_ID}")
+    except Exception as e:
+        print(f"Warning: Could not grant USAGE on schema: {str(e)}")
+    
+    # Grant permissions on catalog (if needed)
+    try:
+        spark.sql(f"GRANT USAGE ON CATALOG {constants.VALIDATION_OPS_CATALOG} TO `{constants.SPN_ID}`")
+        print(f"✓ Granted USAGE permission on catalog {constants.VALIDATION_OPS_CATALOG} to SPN {constants.SPN_ID}")
+    except Exception as e:
+        print(f"⚠ Warning: Could not grant USAGE on catalog: {str(e)}")
+    
+    print("\n Permission grants completed!")
+
+# COMMAND ----------
+
 # DBTITLE 1,Summary
 print("All tables created successfully!")
 print(f"\n1. {constants.VALIDATION_MAPPING_TABLE}")
 print(f"2. {constants.VALIDATION_LOG_TABLE}")
 print(f"3. {constants.VALIDATION_SUMMARY_TABLE}")
+
+if constants.SPN_ID:
+    print("\n Permissions granted to SPN")
+else:
+    print("\n SPN permissions not granted - configure constants.SPN_ID")
+
 print("\nNext step: Run 02_setup_validation_mapping.py to populate validation_mapping")
 

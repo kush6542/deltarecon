@@ -11,8 +11,8 @@ These constants define:
 # INGESTION METADATA TABLES (READ FROM - Source of Truth)
 # ============================================================================
 
-INGESTION_OPS_CATALOG = ""
-INGESTION_OPS_SCHEMA = ""
+INGESTION_OPS_CATALOG = "ts42_demo"
+INGESTION_OPS_SCHEMA = "ts42_demo.migration_operations"
 
 INGESTION_METADATA_TABLE = f"{INGESTION_OPS_SCHEMA}.serving_ingestion_metadata"
 INGESTION_AUDIT_TABLE = f"{INGESTION_OPS_SCHEMA}.serving_ingestion_audit"
@@ -22,8 +22,8 @@ INGESTION_SRC_TABLE_PARTITION_MAPPING = f"{INGESTION_OPS_SCHEMA}.source_table_pa
 # ============================================================================
 # VALIDATION METADATA TABLES (WRITE TO - Validation Results)
 # ============================================================================
-VALIDATION_OPS_CATALOG = ""
-VALIDATION_SCHEMA = ""
+VALIDATION_OPS_CATALOG = "cat_ril_nayeem_03"
+VALIDATION_SCHEMA = f"{VALIDATION_OPS_CATALOG}.validation_v2"
 
 VALIDATION_MAPPING_TABLE = f"{VALIDATION_SCHEMA}.validation_mapping"
 VALIDATION_LOG_TABLE = f"{VALIDATION_SCHEMA}.validation_log"
@@ -39,7 +39,7 @@ SPOT_CHECK_SAMPLE_SIZE = 100  # Number of rows for random spot check
 FRAMEWORK_VERSION = "v1.0.0"
 
 # Batch-level auditing configuration
-BATCH_LEVEL_AUDITING = True  # Don't set this to False, we need batch level auditing
+BATCH_LEVEL_AUDITING = True  # If True, validates each batch individually; If False, validates all batches together
 
 # Retry configuration (for future use)
 MAX_RETRIES = 3
@@ -48,13 +48,9 @@ RETRY_DELAY_SECONDS = 10
 # Timeout configuration
 QUERY_TIMEOUT_SECONDS = 300  # 5 minutes timeout for queries
 
-# Validation run user (for audit trail)
-VALIDATION_USER_NAME = "lightweight_deltarecon"
-VALIDATION_USER_EMAIL = "kushagra.parashar@databricks.com"
-
 # Service Principal configuration (used for job execution and permissions)
 SPN_ID = ""  # Replace with your Service Principal ID (UUID format)
 
 # Job naming configuration
-JOB_NAME_PREFIX = "validation_job"  # Prefix for job names. Change in validation_job_config.yml also if you change this.
+JOB_NAME_PREFIX = "validation_job"  # Prefix for job names. Final format: {JOB_NAME_PREFIX}_{table_group}
 

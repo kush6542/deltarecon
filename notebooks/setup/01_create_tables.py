@@ -14,6 +14,10 @@ Run this ONCE during initial setup.
 
 # DBTITLE 1,Load Constants
 from deltarecon.config import constants
+import importlib
+
+# Reload constants to ensure we get the latest values
+importlib.reload(constants)
 
 # COMMAND ----------
 

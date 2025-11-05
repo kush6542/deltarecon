@@ -3,6 +3,7 @@ Batch processor - Identifies which batches need validation
 
 Logic:
 - For append mode: Process all unvalidated COMPLETED batches
+- For partition_overwrite mode: Process all unvalidated COMPLETED batches
 - For overwrite mode: Process only latest COMPLETED batch
 - Skip batches that are already validated successfully
 - Supports batch-level auditing: returns batch-to-path mapping
@@ -85,7 +86,7 @@ class BatchProcessor:
                             WHERE status = 'COMPLETED'
                                 AND target_table_name = '{config.table_name}'
                         ))
-                        -- For append mode: all batches
+                        -- For append/partition_overwrite modes: all batches
                         OR t4.write_mode <> 'overwrite'
                     )
                     AND (
@@ -223,7 +224,7 @@ class BatchProcessor:
                             WHERE status = 'COMPLETED'
                                 AND target_table_name = '{config.table_name}'
                         ))
-                        -- For append mode: all batches
+                        -- For append/partition_overwrite modes: all batches
                         OR t4.write_mode <> 'overwrite'
                     )
                     AND (

@@ -35,8 +35,8 @@ dbutils.widgets.removeAll()
 
 dbutils.widgets.text("ingestion_ops_schema", "ts42_demo.migration_operations", "1. Ingestion Ops Schema (catalog.schema)")
 dbutils.widgets.text("validation_schema", "cat_ril_nayeem_03.validation_v2", "2. Validation Schema (catalog.schema)")
-dbutils.widgets.text("target_table", "prd_connectivity.home_gold.home_btas_error_kpi_po", "3. Target Table")
-dbutils.widgets.text("batch_load_id", "202510210435", "4. Batch Load ID")
+dbutils.widgets.text("target_table", "ts42_demo.test_validation.customers", "3. Target Table")
+dbutils.widgets.text("batch_load_id", "BATCH_20251102_000001", "4. Batch Load ID")
 dbutils.widgets.dropdown("run_reconciliation", "N", ["Y", "N"], "5. Run Data Reconciliation?")
 
 # Get values
@@ -77,8 +77,8 @@ ingestion_query = f"""
         target_catalog,
         target_schema,
         target_table,
-        source_path,
-        file_format,
+        source_file_path,
+        source_file_format,
         write_mode,
         partition_column
     FROM {INGESTION_CONFIG_TABLE}
@@ -122,9 +122,9 @@ print("\n" + "="*70)
 print("TABLE CONFIGURATION")
 print("="*70)
 print(f"Target Table: {TARGET_TABLE}")
-print(f"Source Path: {ingestion_config.source_path}")
+print(f"Source File Path: {ingestion_config.source_file_path}")
 print(f"Write Mode: {ingestion_config.write_mode}")
-print(f"File Format: {ingestion_config.file_format}")
+print(f"File Format: {ingestion_config.source_file_format}")
 print(f"Primary Keys: {primary_keys}")
 print(f"Partition Columns: {partition_columns}")
 print(f"Exclude Fields: {exclude_fields}")
@@ -140,7 +140,7 @@ print("="*70)
 print("Locating source ORC files for batch...")
 
 # Construct path based on write mode
-source_base_path = ingestion_config.source_path
+source_base_path = ingestion_config.source_file_path
 
 if ingestion_config.write_mode == "partition_overwrite" and partition_columns:
     # For partitioned writes, look in partition directories

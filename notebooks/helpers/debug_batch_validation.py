@@ -33,21 +33,30 @@ print("Setup complete")
 # Create widgets
 dbutils.widgets.removeAll()
 
-dbutils.widgets.text("ingestion_schema", "jio_home_prod.serving_ingestion_config", "1. Ingestion Config Schema")
-dbutils.widgets.text("target_table", "prd_connectivity.home_gold.home_btas_error_kpi_po", "2. Target Table")
-dbutils.widgets.text("batch_load_id", "202510210435", "3. Batch Load ID")
-dbutils.widgets.dropdown("run_reconciliation", "N", ["Y", "N"], "4. Run Data Reconciliation?")
+dbutils.widgets.text("ingestion_ops_schema", "ts42_demo.migration_operations", "1. Ingestion Ops Schema (catalog.schema)")
+dbutils.widgets.text("validation_schema", "cat_ril_nayeem_03.validation_v2", "2. Validation Schema (catalog.schema)")
+dbutils.widgets.text("target_table", "prd_connectivity.home_gold.home_btas_error_kpi_po", "3. Target Table")
+dbutils.widgets.text("batch_load_id", "202510210435", "4. Batch Load ID")
+dbutils.widgets.dropdown("run_reconciliation", "N", ["Y", "N"], "5. Run Data Reconciliation?")
 
 # Get values
-INGESTION_SCHEMA = dbutils.widgets.get("ingestion_schema")
+INGESTION_OPS_SCHEMA = dbutils.widgets.get("ingestion_ops_schema")
+VALIDATION_SCHEMA = dbutils.widgets.get("validation_schema")
 TARGET_TABLE = dbutils.widgets.get("target_table")
 BATCH_LOAD_ID = dbutils.widgets.get("batch_load_id")
 RUN_RECONCILIATION = dbutils.widgets.get("run_reconciliation") == "Y"
 
+# Define table names (matching constants.py)
+INGESTION_CONFIG_TABLE = f"{INGESTION_OPS_SCHEMA}.serving_ingestion_config"
+VALIDATION_MAPPING_TABLE = f"{VALIDATION_SCHEMA}.validation_mapping"
+
 print("="*70)
 print("INPUT PARAMETERS")
 print("="*70)
-print(f"Ingestion Schema: {INGESTION_SCHEMA}")
+print(f"Ingestion Ops Schema: {INGESTION_OPS_SCHEMA}")
+print(f"Validation Schema: {VALIDATION_SCHEMA}")
+print(f"Ingestion Config Table: {INGESTION_CONFIG_TABLE}")
+print(f"Validation Mapping Table: {VALIDATION_MAPPING_TABLE}")
 print(f"Target Table: {TARGET_TABLE}")
 print(f"Batch Load ID: {BATCH_LOAD_ID}")
 print(f"Run Reconciliation: {RUN_RECONCILIATION}")
@@ -61,9 +70,8 @@ print("="*70)
 # COMMAND ----------
 
 print("Fetching configuration from metadata tables...")
-print(f"Using ingestion schema: {INGESTION_SCHEMA}")
 
-# Query ingestion_config table
+# Query serving_ingestion_config table
 ingestion_query = f"""
     SELECT 
         target_catalog,
@@ -73,14 +81,14 @@ ingestion_query = f"""
         file_format,
         write_mode,
         partition_column
-    FROM {INGESTION_SCHEMA}.ingestion_config
+    FROM {INGESTION_CONFIG_TABLE}
     WHERE concat_ws('.', target_catalog, target_schema, target_table) = '{TARGET_TABLE}'
 """
 
 ingestion_config = spark.sql(ingestion_query).collect()
 
 if not ingestion_config:
-    raise ValueError(f"Table '{TARGET_TABLE}' not found in {INGESTION_SCHEMA}.ingestion_config")
+    raise ValueError(f"Table '{TARGET_TABLE}' not found in {INGESTION_CONFIG_TABLE}")
 
 ingestion_config = ingestion_config[0]
 
@@ -89,7 +97,7 @@ validation_query = f"""
     SELECT 
         tgt_primary_keys,
         mismatch_exclude_fields
-    FROM {INGESTION_SCHEMA}.validation_mapping
+    FROM {VALIDATION_MAPPING_TABLE}
     WHERE tgt_table = '{TARGET_TABLE}'
 """
 

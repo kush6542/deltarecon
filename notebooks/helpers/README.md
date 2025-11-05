@@ -16,7 +16,8 @@ This directory contains utility notebooks for debugging and manual validation.
 
 1. Open the notebook in Databricks
 2. Fill in the widgets at the top:
-   - **Ingestion Config Schema**: Schema containing metadata tables (e.g., `jio_home_prod.serving_ingestion_config`)
+   - **Ingestion Ops Schema**: Schema containing ingestion metadata (e.g., `ts42_demo.migration_operations`)
+   - **Validation Schema**: Schema containing validation metadata (e.g., `cat_ril_nayeem_03.validation_v2`)
    - **Target Table**: Full table name (e.g., `prd_connectivity.home_gold.home_btas_error_kpi_po`)
    - **Batch Load ID**: Batch identifier (e.g., `202510210435`)
    - **Run Data Reconciliation**: Select Y or N (reconciliation is slower for large datasets)
@@ -32,8 +33,8 @@ This directory contains utility notebooks for debugging and manual validation.
 
 **How it works:**
 
-1. Queries `ingestion_config` table for source path and write mode
-2. Queries `validation_mapping` table for primary keys
+1. Queries `{ingestion_ops_schema}.serving_ingestion_config` table for source path and write mode
+2. Queries `{validation_schema}.validation_mapping` table for primary keys
 3. Uses `dbutils.fs.ls()` to find ORC files matching the batch
 4. Loads source with `spark.read.format("orc").load(path)`
 5. Extracts partition columns from file paths using regex
@@ -58,7 +59,8 @@ This directory contains utility notebooks for debugging and manual validation.
 **Example:**
 
 ```
-Ingestion Config Schema: jio_home_prod.serving_ingestion_config
+Ingestion Ops Schema: ts42_demo.migration_operations
+Validation Schema: cat_ril_nayeem_03.validation_v2
 Target Table: prd_connectivity.home_gold.home_btas_error_kpi_po
 Batch Load ID: 202510210435
 Run Reconciliation: N
@@ -69,14 +71,31 @@ This will load the batch and run row count, schema, and PK duplicate checks.
 **Dependencies:**
 
 - Access to ingestion metadata tables:
-  - `{ingestion_schema}.ingestion_config`
-  - `{ingestion_schema}.validation_mapping`
+  - `{ingestion_ops_schema}.serving_ingestion_config`
+  - `{ingestion_ops_schema}.source_table_partition_mapping`
+- Access to validation metadata tables:
+  - `{validation_schema}.validation_mapping`
 - Read access to source ORC files in ADLS
 - Read access to target Delta tables
 
 **Portability:**
 
-The notebook is fully portable across environments. Simply change the **Ingestion Config Schema** widget to point to your environment's metadata schema:
-- Dev: `dev_catalog.ingestion_config`
-- UAT: `uat_catalog.ingestion_config`
-- Prod: `jio_home_prod.serving_ingestion_config`
+The notebook is fully portable across environments. Simply change the schema widgets to point to your environment:
+
+**Dev:**
+```
+Ingestion Ops Schema: dev_catalog.migration_operations
+Validation Schema: dev_catalog.validation
+```
+
+**UAT:**
+```
+Ingestion Ops Schema: uat_catalog.migration_operations
+Validation Schema: uat_catalog.validation
+```
+
+**Prod:**
+```
+Ingestion Ops Schema: ts42_demo.migration_operations
+Validation Schema: cat_ril_nayeem_03.validation_v2
+```

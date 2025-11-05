@@ -63,10 +63,11 @@ class SchemaValidator(BaseValidator):
             f.name: f.dataType 
             for f in target_df.schema.fields 
             if not f.name.startswith('_aud_')  # Exclude audit columns
+            and f.name not in partition_cols_to_exclude  # Also exclude partition columns
         }
         
         logger.info(f"Source columns: {len(source_schema)} (excluding {len(partition_cols_to_exclude)} partition columns)")
-        logger.info(f"Target columns: {len(target_schema)} (excluding _aud_* columns)")
+        logger.info(f"Target columns: {len(target_schema)} (excluding _aud_* and {len(partition_cols_to_exclude)} partition columns)")
         
         issues = []
         

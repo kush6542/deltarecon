@@ -8,29 +8,20 @@
 # MAGIC 1. Fill in the widgets at the top
 # MAGIC 2. Run all cells
 # MAGIC 3. Review each validation check output
+# MAGIC 
+# MAGIC **Note:** This notebook uses simple Spark code - no framework imports required
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Setup & Imports
+# MAGIC ## Setup
 
 # COMMAND ----------
 
-import sys
-sys.path.append('/Workspace/Shared/serving_gold_ingestion/dbx_validation_framework')
-
 from pyspark.sql import functions as F
-from pyspark.sql.functions import col, md5, concat_ws, count, lit, regexp_extract
-from deltarecon.config import constants
-from deltarecon.core.ingestion_reader import IngestionConfigReader
-from deltarecon.core.source_target_loader import SourceTargetLoader
-from deltarecon.core.batch_processor import BatchProcessor
-from deltarecon.utils.logger import get_logger
+from pyspark.sql.functions import col, md5, concat_ws, count, lit, regexp_extract, when
 
-logger = get_logger(__name__)
-
-print("Imports successful")
-print("Framework location: /Workspace/Shared/serving_gold_ingestion/dbx_validation_framework")
+print("Setup complete")
 
 # COMMAND ----------
 
@@ -42,118 +33,227 @@ print("Framework location: /Workspace/Shared/serving_gold_ingestion/dbx_validati
 # Create widgets
 dbutils.widgets.removeAll()
 
-dbutils.widgets.text("target_table", "prd_connectivity.home_gold.home_btas_error_kpi_po", "1. Target Table")
-dbutils.widgets.text("batch_load_id", "202510210435", "2. Batch Load ID")
-dbutils.widgets.text("table_group", "home_gold_10am_daily_job", "3. Table Group")
-dbutils.widgets.dropdown("run_reconciliation", "Y", ["Y", "N"], "4. Run Data Reconciliation?")
+dbutils.widgets.text("ingestion_schema", "jio_home_prod.serving_ingestion_config", "1. Ingestion Config Schema")
+dbutils.widgets.text("target_table", "prd_connectivity.home_gold.home_btas_error_kpi_po", "2. Target Table")
+dbutils.widgets.text("batch_load_id", "202510210435", "3. Batch Load ID")
+dbutils.widgets.dropdown("run_reconciliation", "N", ["Y", "N"], "4. Run Data Reconciliation?")
 
 # Get values
+INGESTION_SCHEMA = dbutils.widgets.get("ingestion_schema")
 TARGET_TABLE = dbutils.widgets.get("target_table")
 BATCH_LOAD_ID = dbutils.widgets.get("batch_load_id")
-TABLE_GROUP = dbutils.widgets.get("table_group")
 RUN_RECONCILIATION = dbutils.widgets.get("run_reconciliation") == "Y"
 
 print("="*70)
 print("INPUT PARAMETERS")
 print("="*70)
+print(f"Ingestion Schema: {INGESTION_SCHEMA}")
 print(f"Target Table: {TARGET_TABLE}")
 print(f"Batch Load ID: {BATCH_LOAD_ID}")
-print(f"Table Group: {TABLE_GROUP}")
 print(f"Run Reconciliation: {RUN_RECONCILIATION}")
 print("="*70)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Fetch Table Configuration
+# MAGIC ## Fetch Configuration from Metadata Tables
 
 # COMMAND ----------
 
-print("Fetching table configuration...")
+print("Fetching configuration from metadata tables...")
+print(f"Using ingestion schema: {INGESTION_SCHEMA}")
 
-# Get all configs for the table group
-reader = IngestionConfigReader(spark, TABLE_GROUP)
-all_configs = reader.get_tables_in_group()
+# Query ingestion_config table
+ingestion_query = f"""
+    SELECT 
+        target_catalog,
+        target_schema,
+        target_table,
+        source_path,
+        file_format,
+        write_mode,
+        partition_column
+    FROM {INGESTION_SCHEMA}.ingestion_config
+    WHERE concat_ws('.', target_catalog, target_schema, target_table) = '{TARGET_TABLE}'
+"""
 
-# Find the specific table
-config = None
-for cfg in all_configs:
-    if cfg.table_name == TARGET_TABLE:
-        config = cfg
-        break
+ingestion_config = spark.sql(ingestion_query).collect()
 
-if config is None:
-    raise ValueError(f"Table '{TARGET_TABLE}' not found in group '{TABLE_GROUP}'")
+if not ingestion_config:
+    raise ValueError(f"Table '{TARGET_TABLE}' not found in {INGESTION_SCHEMA}.ingestion_config")
+
+ingestion_config = ingestion_config[0]
+
+# Query validation_mapping table
+validation_query = f"""
+    SELECT 
+        tgt_primary_keys,
+        mismatch_exclude_fields
+    FROM {INGESTION_SCHEMA}.validation_mapping
+    WHERE tgt_table = '{TARGET_TABLE}'
+"""
+
+validation_config = spark.sql(validation_query).collect()
+
+if not validation_config:
+    print("WARNING: Table not found in validation_mapping, using defaults")
+    primary_keys = []
+    exclude_fields = []
+else:
+    validation_config = validation_config[0]
+    # Parse primary keys (pipe-separated)
+    primary_keys = [pk.strip() for pk in validation_config.tgt_primary_keys.split('|')] if validation_config.tgt_primary_keys else []
+    # Parse exclude fields (comma-separated)
+    exclude_fields = [f.strip() for f in validation_config.mismatch_exclude_fields.split(',') if validation_config.mismatch_exclude_fields] if validation_config.mismatch_exclude_fields else []
+
+# Parse partition columns (comma-separated)
+partition_columns = [pc.strip() for pc in ingestion_config.partition_column.split(',')] if ingestion_config.partition_column else []
 
 print("\nConfiguration loaded successfully")
 print("\n" + "="*70)
 print("TABLE CONFIGURATION")
 print("="*70)
-print(f"Table Name: {config.table_name}")
-print(f"Source Table: {config.source_table}")
-print(f"Write Mode: {config.write_mode}")
-print(f"Primary Keys: {config.primary_keys}")
-print(f"Partition Columns: {config.partition_columns}")
-print(f"Partition Types: {config.partition_datatypes}")
-print(f"Exclude Fields: {config.mismatch_exclude_fields}")
-print(f"Is Active: {config.is_active}")
+print(f"Target Table: {TARGET_TABLE}")
+print(f"Source Path: {ingestion_config.source_path}")
+print(f"Write Mode: {ingestion_config.write_mode}")
+print(f"File Format: {ingestion_config.file_format}")
+print(f"Primary Keys: {primary_keys}")
+print(f"Partition Columns: {partition_columns}")
+print(f"Exclude Fields: {exclude_fields}")
 print("="*70)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Verify Batch Exists in Source
+# MAGIC ## Find Source ORC Files for Batch
 
 # COMMAND ----------
 
-print("Checking if batch exists in source...")
+print("Locating source ORC files for batch...")
 
-batch_processor = BatchProcessor(spark)
-unprocessed_batches = batch_processor.get_unprocessed_batches(config)
+# Construct path based on write mode
+source_base_path = ingestion_config.source_path
 
-if BATCH_LOAD_ID not in unprocessed_batches:
-    print(f"\nWARNING: Batch '{BATCH_LOAD_ID}' not found in unprocessed batches")
-    print(f"This may be expected if the batch was already processed")
-    print(f"\nAvailable unprocessed batches ({len(unprocessed_batches)}):")
-    for batch_id in sorted(unprocessed_batches.keys())[:10]:
-        print(f"  - {batch_id}")
-    if len(unprocessed_batches) > 10:
-        print(f"  ... and {len(unprocessed_batches) - 10} more")
+if ingestion_config.write_mode == "partition_overwrite" and partition_columns:
+    # For partitioned writes, look in partition directories
+    # Format: /base/path/partition_col=value/
+    # We need to find directories matching our batch_load_id
+    
+    # List partition directories
+    try:
+        partition_dirs = dbutils.fs.ls(source_base_path)
+        
+        # Filter for directories containing our batch_load_id
+        matching_dirs = []
+        for dir_info in partition_dirs:
+            if BATCH_LOAD_ID in dir_info.path:
+                matching_dirs.append(dir_info.path)
+        
+        if not matching_dirs:
+            print(f"WARNING: No partition directories found matching batch_load_id: {BATCH_LOAD_ID}")
+            print(f"Trying alternative path patterns...")
+            
+            # Try looking in subdirectories
+            for dir_info in partition_dirs:
+                if dir_info.isDir():
+                    try:
+                        subdirs = dbutils.fs.ls(dir_info.path)
+                        for subdir in subdirs:
+                            if BATCH_LOAD_ID in subdir.path:
+                                matching_dirs.append(subdir.path)
+                    except:
+                        pass
+        
+        if matching_dirs:
+            source_paths = matching_dirs
+            print(f"Found {len(source_paths)} partition path(s) for batch {BATCH_LOAD_ID}")
+            for path in source_paths[:5]:
+                print(f"  - {path}")
+            if len(source_paths) > 5:
+                print(f"  ... and {len(source_paths) - 5} more")
+        else:
+            raise ValueError(f"No source files found for batch {BATCH_LOAD_ID}")
+            
+    except Exception as e:
+        print(f"Error listing directories: {e}")
+        # Fallback: try direct path
+        source_paths = [f"{source_base_path}/*{BATCH_LOAD_ID}*"]
+        print(f"Using pattern: {source_paths[0]}")
 else:
-    batch_info = unprocessed_batches[BATCH_LOAD_ID]
-    print(f"\nBatch found in source")
-    print(f"  ORC Files: {len(batch_info['orc_files'])}")
-    print(f"  Sample path: {batch_info['orc_files'][0] if batch_info['orc_files'] else 'N/A'}")
+    # For append/overwrite, files might be in the base directory
+    source_paths = [f"{source_base_path}/*{BATCH_LOAD_ID}*"]
+    print(f"Using pattern: {source_paths[0]}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Load Source & Target Data
+# MAGIC ## Load Source Data (ORC Files)
 
 # COMMAND ----------
 
-print("Loading source and target data...")
-
-loader = SourceTargetLoader(spark)
+print("Loading source ORC files...")
 
 try:
-    source_df, target_df = loader.load_batch(BATCH_LOAD_ID, config)
+    # Read ORC files
+    source_df = None
+    for path in source_paths:
+        df_temp = spark.read.format("orc").load(path)
+        if source_df is None:
+            source_df = df_temp
+        else:
+            source_df = source_df.union(df_temp)
     
-    # Cache for performance
+    # Extract partition columns from file path if they don't exist in data
+    if partition_columns:
+        for part_col in partition_columns:
+            if part_col not in source_df.columns:
+                print(f"  Extracting partition column: {part_col}")
+                # Extract from _metadata.file_path
+                pattern = f"{part_col}=([^/]+)"
+                source_df = source_df.withColumn(
+                    part_col,
+                    regexp_extract(col("_metadata.file_path"), pattern, 1)
+                )
+                
+                # Try to cast to appropriate type (date, int, etc.)
+                # Default to date for partition_date, string for others
+                if "date" in part_col.lower():
+                    source_df = source_df.withColumn(part_col, col(part_col).cast("date"))
+    
     source_df.cache()
-    target_df.cache()
-    
     src_count = source_df.count()
-    tgt_count = target_df.count()
     
-    print("\nData loaded and cached")
-    print(f"  Source rows: {src_count:,}")
-    print(f"  Target rows: {tgt_count:,}")
-    print(f"  Source columns: {len(source_df.columns)}")
-    print(f"  Target columns: {len(target_df.columns)}")
+    print(f"\nSource data loaded successfully")
+    print(f"  Rows: {src_count:,}")
+    print(f"  Columns: {len(source_df.columns)}")
     
 except Exception as e:
-    print(f"\nERROR loading data: {str(e)}")
+    print(f"ERROR loading source data: {str(e)}")
+    raise
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Load Target Data (Delta Table)
+
+# COMMAND ----------
+
+print("Loading target Delta table...")
+
+try:
+    # Read Delta table and filter by batch_load_id
+    target_df = spark.read.format("delta").table(TARGET_TABLE)
+    target_df = target_df.filter(col("_aud_batch_load_id") == BATCH_LOAD_ID)
+    
+    target_df.cache()
+    tgt_count = target_df.count()
+    
+    print(f"\nTarget data loaded successfully")
+    print(f"  Rows: {tgt_count:,}")
+    print(f"  Columns: {len(target_df.columns)}")
+    
+except Exception as e:
+    print(f"ERROR loading target data: {str(e)}")
     raise
 
 # COMMAND ----------
@@ -228,21 +328,20 @@ print("="*70)
 print("CHECK 2: SCHEMA VALIDATION")
 print("="*70)
 
-# Exclude partition columns from source (they're extracted, not in original data)
-# Exclude audit columns from target
-partition_cols = set(config.partition_columns) if config.partition_columns else set()
+# Build schema dictionaries
+# Exclude partition columns from source (they were extracted from path)
+# Exclude audit columns (_aud_*) from target
+partition_cols_set = set(partition_columns)
 
-source_schema = {
-    f.name: f.dataType.simpleString() 
-    for f in source_df.schema.fields 
-    if f.name not in partition_cols
-}
+source_schema = {}
+for field in source_df.schema.fields:
+    if field.name not in partition_cols_set:
+        source_schema[field.name] = field.dataType.simpleString()
 
-target_schema = {
-    f.name: f.dataType.simpleString() 
-    for f in target_df.schema.fields 
-    if not f.name.startswith('_aud_') and f.name not in partition_cols
-}
+target_schema = {}
+for field in target_df.schema.fields:
+    if not field.name.startswith('_aud_') and field.name not in partition_cols_set:
+        target_schema[field.name] = field.dataType.simpleString()
 
 # Compare
 source_cols = set(source_schema.keys())
@@ -301,16 +400,17 @@ print("="*70)
 print("CHECK 3: PRIMARY KEY DUPLICATE CHECK")
 print("="*70)
 
-if not config.primary_keys:
-    print("No primary keys defined - SKIPPED")
+if not primary_keys:
+    print("No primary keys configured - SKIPPED")
+    src_duplicates = 0
+    tgt_duplicates = 0
     print("="*70)
 else:
-    pk_cols = config.primary_keys
-    print(f"Primary key columns: {pk_cols}")
+    print(f"Primary key columns: {primary_keys}")
     
-    # Verify PK columns exist
-    src_missing_pks = set(pk_cols) - set(source_df.columns)
-    tgt_missing_pks = set(pk_cols) - set(target_df.columns)
+    # Verify PK columns exist in both dataframes
+    src_missing_pks = set(primary_keys) - set(source_df.columns)
+    tgt_missing_pks = set(primary_keys) - set(target_df.columns)
     
     if src_missing_pks or tgt_missing_pks:
         print(f"\nERROR: Primary key columns missing!")
@@ -319,11 +419,13 @@ else:
         if tgt_missing_pks:
             print(f"  Missing in target: {tgt_missing_pks}")
         print("\nStatus: FAILED (configuration error)")
+        src_duplicates = -1
+        tgt_duplicates = -1
     else:
-        # Check source
+        # Check SOURCE for duplicates
         print(f"\nChecking SOURCE for duplicates...")
         src_total = source_df.count()
-        src_distinct = source_df.select(pk_cols).distinct().count()
+        src_distinct = source_df.select(primary_keys).distinct().count()
         src_duplicates = src_total - src_distinct
         
         print(f"  Total rows: {src_total:,}")
@@ -335,7 +437,7 @@ else:
             print(f"\n  Top 10 duplicate keys in SOURCE:")
             duplicate_keys = (
                 source_df
-                .groupBy(pk_cols)
+                .groupBy(primary_keys)
                 .agg(count("*").alias("duplicate_count"))
                 .filter(col("duplicate_count") > 1)
                 .orderBy(col("duplicate_count").desc())
@@ -343,10 +445,10 @@ else:
             )
             display(duplicate_keys)
         
-        # Check target
+        # Check TARGET for duplicates
         print(f"\nChecking TARGET for duplicates...")
         tgt_total = target_df.count()
-        tgt_distinct = target_df.select(pk_cols).distinct().count()
+        tgt_distinct = target_df.select(primary_keys).distinct().count()
         tgt_duplicates = tgt_total - tgt_distinct
         
         print(f"  Total rows: {tgt_total:,}")
@@ -358,7 +460,7 @@ else:
             print(f"\n  Top 10 duplicate keys in TARGET:")
             duplicate_keys = (
                 target_df
-                .groupBy(pk_cols)
+                .groupBy(primary_keys)
                 .agg(count("*").alias("duplicate_count"))
                 .filter(col("duplicate_count") > 1)
                 .orderBy(col("duplicate_count").desc())
@@ -384,21 +486,24 @@ if not RUN_RECONCILIATION:
     print("="*70)
     print("SKIPPED (user selected N)")
     print("="*70)
+    src_extras = 0
+    tgt_extras = 0
+    matches = 0
 else:
     print("="*70)
     print("CHECK 4: DATA RECONCILIATION (Full Row Hash)")
     print("="*70)
     
-    # Determine columns to hash
-    partition_cols = set(config.partition_columns) if config.partition_columns else set()
-    exclude_from_hash = partition_cols | {"_aud_batch_load_id"}
+    # Determine columns to include in hash
+    # Exclude: partition columns (extracted from path) and audit columns
+    partition_cols_set = set(partition_columns)
     
-    src_cols_to_hash = [c for c in source_df.columns if c not in exclude_from_hash]
-    tgt_cols_to_hash = [c for c in target_df.columns if not c.startswith('_aud_') and c not in partition_cols]
+    src_cols_to_hash = [c for c in source_df.columns if c not in partition_cols_set]
+    tgt_cols_to_hash = [c for c in target_df.columns if not c.startswith('_aud_') and c not in partition_cols_set]
     
     print(f"Columns in hash (source): {len(src_cols_to_hash)}")
     print(f"Columns in hash (target): {len(tgt_cols_to_hash)}")
-    print(f"Excluded from hash: {exclude_from_hash}")
+    print(f"Excluded from hash: partition columns {partition_columns}, audit columns (_aud_*)")
     
     # Sort columns for consistent hashing
     src_cols_sorted = sorted(src_cols_to_hash)
@@ -406,6 +511,8 @@ else:
     
     print(f"\nComputing row hashes...")
     
+    # Create hash for each row
+    # Convert all columns to string and concatenate with separator, then hash
     source_with_hash = source_df.withColumn(
         "row_hash",
         md5(concat_ws("||", *[col(c).cast("string") for c in src_cols_sorted]))
@@ -426,7 +533,7 @@ else:
     print(f"Source distinct rows: {src_distinct:,}")
     print(f"Target distinct rows: {tgt_distinct:,}")
     
-    # Compute differences
+    # Compute set differences
     print(f"\nComputing set differences...")
     src_extras = src_hashes.subtract(tgt_hashes).count()
     tgt_extras = tgt_hashes.subtract(src_hashes).count()
@@ -461,7 +568,7 @@ else:
     print("DEEP DIVE: SAMPLE MISMATCHES")
     print("="*70)
     
-    # Recreate full hashes
+    # Recreate full hashes for joining back to original data
     source_full_hash = source_df.withColumn(
         "row_hash",
         md5(concat_ws("||", *[col(c).cast("string") for c in src_cols_sorted]))
@@ -486,48 +593,51 @@ else:
         tgt_extra_rows = target_full_hash.join(tgt_extra_hashes, "row_hash", "inner").drop("row_hash")
         display(tgt_extra_rows)
     
-    # If primary keys exist, find matching keys with different values
-    if config.primary_keys and src_extras > 0 and tgt_extras > 0:
-        print(f"\nSearching for rows with SAME primary key but DIFFERENT values...")
-        print("-"*70)
-        pk_cols = config.primary_keys
+    # If primary keys exist, find rows with same PK but different values
+    if primary_keys and src_extras > 0 and tgt_extras > 0:
+        src_missing_pks = set(primary_keys) - set(source_df.columns)
+        tgt_missing_pks = set(primary_keys) - set(target_df.columns)
         
-        # Get PKs from extras
-        src_pks = source_full_hash.join(
-            src_hashes.subtract(tgt_hashes), "row_hash", "inner"
-        ).select(pk_cols).distinct()
-        
-        tgt_pks = target_full_hash.join(
-            tgt_hashes.subtract(src_hashes), "row_hash", "inner"
-        ).select(pk_cols).distinct()
-        
-        common_pks = src_pks.intersect(tgt_pks).limit(5)
-        common_pk_count = common_pks.count()
-        
-        if common_pk_count > 0:
-            print(f"Found {common_pk_count} primary keys with value differences")
-            print(f"Showing first 5 examples:\n")
+        if not (src_missing_pks or tgt_missing_pks):
+            print(f"\nSearching for rows with SAME primary key but DIFFERENT values...")
+            print("-"*70)
             
-            for idx, pk_row in enumerate(common_pks.collect(), 1):
-                pk_dict = pk_row.asDict()
-                print(f"\nExample {idx}:")
-                print(f"Primary Key: {pk_dict}")
-                print("-"*70)
+            # Get PKs from extras
+            src_pks = source_full_hash.join(
+                src_hashes.subtract(tgt_hashes), "row_hash", "inner"
+            ).select(primary_keys).distinct()
+            
+            tgt_pks = target_full_hash.join(
+                tgt_hashes.subtract(src_hashes), "row_hash", "inner"
+            ).select(primary_keys).distinct()
+            
+            common_pks = src_pks.intersect(tgt_pks).limit(5)
+            common_pk_count = common_pks.count()
+            
+            if common_pk_count > 0:
+                print(f"Found {common_pk_count} primary keys with value differences")
+                print(f"Showing first 5 examples:\n")
                 
-                # Build filter condition
-                filter_conditions = [col(k) == pk_dict[k] for k in pk_cols]
-                combined_filter = filter_conditions[0]
-                for condition in filter_conditions[1:]:
-                    combined_filter = combined_filter & condition
-                
-                print("SOURCE row:")
-                display(source_df.filter(combined_filter))
-                
-                print("TARGET row:")
-                display(target_df.filter(combined_filter))
-        else:
-            print("No common primary keys found")
-            print("The extras are completely different rows (different PKs)")
+                for idx, pk_row in enumerate(common_pks.collect(), 1):
+                    pk_dict = pk_row.asDict()
+                    print(f"\nExample {idx}:")
+                    print(f"Primary Key: {pk_dict}")
+                    print("-"*70)
+                    
+                    # Build filter condition
+                    filter_conditions = [col(k) == pk_dict[k] for k in primary_keys]
+                    combined_filter = filter_conditions[0]
+                    for condition in filter_conditions[1:]:
+                        combined_filter = combined_filter & condition
+                    
+                    print("SOURCE row:")
+                    display(source_df.filter(combined_filter))
+                    
+                    print("TARGET row:")
+                    display(target_df.filter(combined_filter))
+            else:
+                print("No common primary keys found")
+                print("The extras are completely different rows (different PKs)")
     
     print("\n" + "="*70)
 
@@ -557,9 +667,9 @@ schema_status = "PASSED" if schema_passed else "FAILED"
 
 # PK duplicates
 pk_status = "SKIPPED"
-if config.primary_keys:
+if primary_keys:
     checks_run.append("PK Duplicates")
-    if not (src_missing_pks or tgt_missing_pks):
+    if src_duplicates >= 0 and tgt_duplicates >= 0:
         pk_passed = (src_duplicates == 0 and tgt_duplicates == 0)
         if pk_passed:
             checks_passed.append("PK Duplicates")
@@ -586,9 +696,9 @@ print(f"Date: {spark.sql('SELECT current_timestamp()').collect()[0][0]}")
 print("="*70)
 
 print("\nCHECK RESULTS:")
-print(f"  1. Row Count:          {row_count_status}")
-print(f"  2. Schema:             {schema_status}")
-print(f"  3. PK Duplicates:      {pk_status}")
+print(f"  1. Row Count:           {row_count_status}")
+print(f"  2. Schema:              {schema_status}")
+print(f"  3. PK Duplicates:       {pk_status}")
 print(f"  4. Data Reconciliation: {recon_status}")
 
 print(f"\nOVERALL: {len(checks_passed)} of {len(checks_run)} checks passed")
@@ -598,7 +708,7 @@ print(f"  Source rows: {src_count:,}")
 print(f"  Target rows: {tgt_count:,}")
 print(f"  Row difference: {abs(src_count - tgt_count):,}")
 
-if config.primary_keys and not (src_missing_pks or tgt_missing_pks):
+if primary_keys and src_duplicates >= 0:
     print(f"  Source PK duplicates: {src_duplicates:,}")
     print(f"  Target PK duplicates: {tgt_duplicates:,}")
 
@@ -613,4 +723,3 @@ print("="*70)
 source_df.unpersist()
 target_df.unpersist()
 print("\nCache cleared")
-

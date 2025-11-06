@@ -379,12 +379,13 @@ def create_config_entry(
     }
 
 # Create config entries for all 6 tables
+# NOTE: source_file_path must point to the directory containing the batch folder
 config_entries = [
     # 1. Orders (ORC, partitioned)
     create_config_entry(
         config_id="TEST_E2E_001",
         table_name="orders",
-        source_file_path=f"{DBFS_BASE_PATH}/orc/orders",
+        source_file_path=f"{DBFS_BASE_PATH}/orc/orders/{BATCH_LOAD_ID}",
         source_file_format="orc",
         source_file_options={},
         primary_key="order_id",
@@ -395,7 +396,7 @@ config_entries = [
     create_config_entry(
         config_id="TEST_E2E_002",
         table_name="inventory",
-        source_file_path=f"{DBFS_BASE_PATH}/orc/inventory",
+        source_file_path=f"{DBFS_BASE_PATH}/orc/inventory/{BATCH_LOAD_ID}",
         source_file_format="orc",
         source_file_options={},
         primary_key="product_id"
@@ -405,7 +406,7 @@ config_entries = [
     create_config_entry(
         config_id="TEST_E2E_003",
         table_name="customers",
-        source_file_path=f"{DBFS_BASE_PATH}/text/customers",
+        source_file_path=f"{DBFS_BASE_PATH}/text/customers/{BATCH_LOAD_ID}",
         source_file_format="text",
         source_file_options={
             "header": "false",
@@ -419,7 +420,7 @@ config_entries = [
     create_config_entry(
         config_id="TEST_E2E_004",
         table_name="transactions",
-        source_file_path=f"{DBFS_BASE_PATH}/text/transactions",
+        source_file_path=f"{DBFS_BASE_PATH}/text/transactions/{BATCH_LOAD_ID}",
         source_file_format="text",
         source_file_options={
             "header": "false",
@@ -433,7 +434,7 @@ config_entries = [
     create_config_entry(
         config_id="TEST_E2E_005",
         table_name="employees",
-        source_file_path=f"{DBFS_BASE_PATH}/csv/employees",
+        source_file_path=f"{DBFS_BASE_PATH}/csv/employees/{BATCH_LOAD_ID}",
         source_file_format="csv",
         source_file_options={
             "header": "true",
@@ -448,7 +449,7 @@ config_entries = [
     create_config_entry(
         config_id="TEST_E2E_006",
         table_name="sales_metrics",
-        source_file_path=f"{DBFS_BASE_PATH}/csv/sales_metrics",
+        source_file_path=f"{DBFS_BASE_PATH}/csv/sales_metrics/{BATCH_LOAD_ID}",
         source_file_format="csv",
         source_file_options={
             "header": "true",

@@ -267,14 +267,12 @@ print(f"✓ Created ORC file: {inventory_path}")
 # Table 3: Customer Details (TEXT - tab delimited, no header)
 customers_df = spark.createDataFrame(customers_data, customers_schema)
 customers_path = f"{DBFS_BASE_PATH}/text/customers/{BATCH_LOAD_ID}"
-# Write as text with tab delimiter
 customers_df.write.mode("overwrite").option("sep", "\t").option("header", "false").format("csv").save(customers_path)
 print(f"✓ Created TEXT file (tab-delimited): {customers_path}")
 
 # Table 4: Transaction Log (TEXT - pipe delimited, no header)
 transactions_df = spark.createDataFrame(transactions_data, transactions_schema)
 transactions_path = f"{DBFS_BASE_PATH}/text/transactions/{BATCH_LOAD_ID}"
-# Write as text with pipe delimiter
 transactions_df.write.mode("overwrite").option("sep", "|").option("header", "false").format("csv").save(transactions_path)
 print(f"✓ Created TEXT file (pipe-delimited): {transactions_path}")
 
@@ -381,15 +379,15 @@ def create_config_entry(
 # Create config entries for all 6 tables
 # NOTE: source_file_path must point to the directory containing the batch folder
 config_entries = [
-    # 1. Orders (ORC, partitioned)
+    # 1. Orders (ORC with partition_date column)
     create_config_entry(
         config_id="TEST_E2E_001",
         table_name="orders",
         source_file_path=f"{DBFS_BASE_PATH}/orc/orders/{BATCH_LOAD_ID}",
         source_file_format="orc",
         source_file_options={},
-        primary_key="order_id",
-        partition_column="partition_date"
+        primary_key="order_id"
+        # Note: partition_date exists as a regular column in the data, not Hive-style partitioning
     ),
     
     # 2. Inventory (ORC, no partition)
@@ -472,22 +470,24 @@ print(f"✓ Inserted {len(config_entries)} entries into {INGESTION_CONFIG_TABLE}
 
 import os
 
-def get_file_info(path):
-    """Get file size and modification time from DBFS"""
+def get_all_data_files(path):
+    """
+    Get ALL data files from a directory (not just the first one!)
+    This properly tests the framework's ability to handle multiple files per batch.
+    """
     try:
         file_info = dbutils.fs.ls(path)
-        # Get the first .orc, .csv, or part file
+        data_files = []
         for f in file_info:
-            if not f.name.startswith('_') and (f.size > 0):
-                return f.path, f.modificationTime, f.size
-        # If no data file found, return first file
-        if file_info:
-            return file_info[0].path, file_info[0].modificationTime, file_info[0].size
-    except:
-        pass
-    return path, datetime.now().timestamp() * 1000, 0
+            # Skip Spark metadata files and empty files
+            if not f.name.startswith('_') and f.size > 0:
+                data_files.append((f.path, f.modificationTime, f.size))
+        return data_files
+    except Exception as e:
+        print(f"Warning: Could not list files in {path}: {e}")
+        return []
 
-# Create metadata entries
+# Create metadata entries - ONE ENTRY PER FILE (not per table!)
 metadata_entries = []
 
 file_paths = [
@@ -499,24 +499,30 @@ file_paths = [
     (sales_metrics_path, "sales_metrics")
 ]
 
-for file_path, table_name in file_paths:
-    source_file, mod_time, file_size = get_file_info(file_path)
+for dir_path, table_name in file_paths:
+    # Get ALL files from this directory
+    all_files = get_all_data_files(dir_path)
     
-    metadata_entries.append({
-        "table_name": f"{TEST_CATALOG}.{TEST_SCHEMA}.{table_name}",
-        "batch_load_id": BATCH_LOAD_ID,
-        "source_file_path": source_file,
-        "file_modification_time": datetime.fromtimestamp(mod_time / 1000),
-        "file_size": file_size,
-        "is_processed": "Y",
-        "insert_ts": datetime.now(),
-        "last_update_ts": datetime.now()
-    })
+    print(f"  {table_name}: Found {len(all_files)} file(s)")
+    
+    # Create one metadata entry per file
+    for source_file, mod_time, file_size in all_files:
+        metadata_entries.append({
+            "table_name": f"{TEST_CATALOG}.{TEST_SCHEMA}.{table_name}",
+            "batch_load_id": BATCH_LOAD_ID,
+            "source_file_path": source_file,
+            "file_modification_time": datetime.fromtimestamp(mod_time / 1000),
+            "file_size": file_size,
+            "is_processed": "Y",
+            "insert_ts": datetime.now(),
+            "last_update_ts": datetime.now()
+        })
 
 # Create DataFrame and insert
 metadata_df = spark.createDataFrame(metadata_entries)
 metadata_df.write.mode("append").saveAsTable(INGESTION_METADATA_TABLE)
-print(f"✓ Inserted {len(metadata_entries)} entries into {INGESTION_METADATA_TABLE}")
+print(f"✓ Inserted {len(metadata_entries)} file entries into {INGESTION_METADATA_TABLE}")
+print(f"  This tests the framework's ability to read multiple files per batch!")
 
 # COMMAND ----------
 
@@ -745,17 +751,30 @@ else:
     print(f"\n❌ Ingestion Config: {config_count} entries (expected: 6) - DUPLICATES DETECTED!")
     all_good = False
 
-# Check 2: Ingestion Metadata (should be exactly 6)
+# Check 2: Ingestion Metadata (should be >= 6, one entry per file)
 metadata_count = spark.sql(f"""
     SELECT COUNT(*) as count 
     FROM {INGESTION_METADATA_TABLE}
     WHERE table_name LIKE '{TEST_CATALOG}.{TEST_SCHEMA}.%'
 """).collect()[0]['count']
 
-if metadata_count == 6:
-    print(f"✓ Ingestion Metadata: {metadata_count} entries (expected: 6)")
+# Show breakdown by table
+metadata_breakdown = spark.sql(f"""
+    SELECT table_name, COUNT(*) as file_count
+    FROM {INGESTION_METADATA_TABLE}
+    WHERE table_name LIKE '{TEST_CATALOG}.{TEST_SCHEMA}.%'
+    GROUP BY table_name
+    ORDER BY table_name
+""").collect()
+
+if metadata_count >= 6:
+    print(f"✓ Ingestion Metadata: {metadata_count} file entries (expected: >=6)")
+    print(f"  Breakdown by table:")
+    for row in metadata_breakdown:
+        table_short = row['table_name'].split('.')[-1]
+        print(f"    {table_short}: {row['file_count']} file(s)")
 else:
-    print(f"❌ Ingestion Metadata: {metadata_count} entries (expected: 6) - DUPLICATES DETECTED!")
+    print(f"❌ Ingestion Metadata: {metadata_count} entries (expected: >=6)")
     all_good = False
 
 # Check 3: Ingestion Audit (should be exactly 6)

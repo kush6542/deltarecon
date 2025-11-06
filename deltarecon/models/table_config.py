@@ -30,6 +30,10 @@ class TableConfig:
     # Processing mode
     write_mode: str                     # "append", "overwrite", or "partition_overwrite"
     
+    # Source file configuration
+    source_file_format: str             # REQUIRED: "orc", "csv", "text", etc.
+    source_file_options: Optional[Dict] = field(default_factory=dict)  # Format-specific options
+    
     # Validation configuration
     primary_keys: Optional[List[str]] = field(default_factory=list)
     partition_columns: Optional[List[str]] = field(default_factory=list)
@@ -64,6 +68,9 @@ class TableConfig:
                 f"Invalid write_mode: {self.write_mode}. "
                 f"Must be 'append', 'overwrite', or 'partition_overwrite'"
             )
+        
+        if not self.source_file_format:
+            raise ConfigurationError("source_file_format cannot be empty")
         
         if self.partition_columns and not isinstance(self.partition_columns, list):
             raise ConfigurationError("partition_columns must be a list")

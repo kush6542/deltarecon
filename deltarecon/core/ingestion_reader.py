@@ -3,9 +3,10 @@ Ingestion metadata reader
 
 Reads configuration from:
 - validation_mapping (validation configs)
-- ingestion_config (write_mode, partitions)
+- ingestion_config (write_mode, partitions, source file format and options)
 """
 
+import json
 from typing import List
 from pyspark.sql import SparkSession
 
@@ -62,7 +63,9 @@ class IngestionConfigReader:
                     vm.mismatch_exclude_fields,
                     vm.validation_is_active,
                     ic.write_mode,
-                    ic.partition_column
+                    ic.partition_column,
+                    ic.source_file_format,
+                    ic.source_file_options
                 FROM {constants.VALIDATION_MAPPING_TABLE} vm
                 INNER JOIN {constants.INGESTION_CONFIG_TABLE} ic
                     ON vm.tgt_table = concat_ws('.', ic.target_catalog, ic.target_schema, ic.target_table)
@@ -119,6 +122,27 @@ class IngestionConfigReader:
         if row.mismatch_exclude_fields:
             exclude_fields = [f.strip() for f in row.mismatch_exclude_fields.split(',') if f.strip()]
         
+        # Parse source file format (REQUIRED - no default)
+        if not row.source_file_format:
+            raise ConfigurationError(
+                f"source_file_format is missing for table {row.tgt_table}. "
+                f"This is a required field. Please specify 'orc', 'csv', or 'text'."
+            )
+        source_file_format = row.source_file_format.lower().strip()
+        
+        # Parse source file options (JSON string to dict)
+        source_file_options = {}
+        if row.source_file_options:
+            try:
+                source_file_options = json.loads(row.source_file_options)
+                self.logger.info(f"  Parsed source_file_options for {row.tgt_table}: {source_file_options}")
+            except json.JSONDecodeError as e:
+                self.logger.warning(
+                    f"Failed to parse source_file_options for {row.tgt_table}: {e}. "
+                    f"Will use empty options."
+                )
+                source_file_options = {}
+        
         # Get partition datatypes if partitions exist
         partition_datatypes = {}
         if partition_columns:
@@ -133,6 +157,8 @@ class IngestionConfigReader:
             table_name=row.tgt_table,
             source_table=row.src_table,
             write_mode=row.write_mode,
+            source_file_format=source_file_format,
+            source_file_options=source_file_options,
             primary_keys=primary_keys,
             partition_columns=partition_columns,
             partition_datatypes=partition_datatypes,

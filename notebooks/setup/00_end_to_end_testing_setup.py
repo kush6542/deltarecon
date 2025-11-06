@@ -459,8 +459,36 @@ config_entries = [
     ),
 ]
 
-# Create DataFrame and insert
-config_df = spark.createDataFrame(config_entries)
+# Define schema for ingestion_config (required because of None values)
+from pyspark.sql.types import StructType, StructField, StringType, TimestampType
+
+ingestion_config_schema = StructType([
+    StructField('config_id', StringType(), True),
+    StructField('group_name', StringType(), True),
+    StructField('source_schema', StringType(), True),
+    StructField('source_table', StringType(), True),
+    StructField('source_file_path', StringType(), True),
+    StructField('target_catalog', StringType(), True),
+    StructField('target_schema', StringType(), True),
+    StructField('target_table', StringType(), True),
+    StructField('source_file_format', StringType(), True),
+    StructField('source_file_options', StringType(), True),
+    StructField('load_type', StringType(), True),
+    StructField('write_mode', StringType(), True),
+    StructField('primary_key', StringType(), True),
+    StructField('partition_column', StringType(), True),
+    StructField('partitioning_strategy', StringType(), True),
+    StructField('frequency', StringType(), True),
+    StructField('table_size_gb', StringType(), True),
+    StructField('is_active', StringType(), True),
+    StructField('deduplicate', StringType(), True),
+    StructField('clean_column_names', StringType(), True),
+    StructField('insert_ts', TimestampType(), True),
+    StructField('last_update_ts', TimestampType(), True),
+])
+
+# Create DataFrame with explicit schema and insert
+config_df = spark.createDataFrame(config_entries, schema=ingestion_config_schema)
 config_df.write.mode("append").saveAsTable(INGESTION_CONFIG_TABLE)
 print(f"✓ Inserted {len(config_entries)} entries into {INGESTION_CONFIG_TABLE}")
 

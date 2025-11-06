@@ -19,6 +19,8 @@ from pyspark.sql.functions import current_timestamp, lit
 from datetime import datetime, timedelta
 import json
 
+# Note: lit() is used to add the _aud_batch_load_id column to target tables
+
 # COMMAND ----------
 
 # DBTITLE 1,Configuration
@@ -41,6 +43,71 @@ print(f"Test Schema: {TEST_SCHEMA}")
 print(f"Test Group: {TEST_GROUP_NAME}")
 print(f"Batch Load ID: {BATCH_LOAD_ID}")
 print(f"DBFS Base Path: {DBFS_BASE_PATH}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Cleanup Existing Test Data (Run this before re-running)
+
+print("=" * 80)
+print("CLEANING UP EXISTING TEST DATA")
+print("=" * 80)
+
+# Option 1: Clean everything (recommended for fresh start)
+CLEAN_ALL = True  # Set to False to skip cleanup
+
+if CLEAN_ALL:
+    print("\n1. Dropping test schema (if exists)...")
+    try:
+        spark.sql(f"DROP SCHEMA IF EXISTS {TEST_CATALOG}.{TEST_SCHEMA} CASCADE")
+        print(f"   ✓ Dropped schema: {TEST_CATALOG}.{TEST_SCHEMA}")
+    except Exception as e:
+        print(f"   ⚠ Could not drop schema: {e}")
+    
+    print("\n2. Removing DBFS files (if exist)...")
+    try:
+        dbutils.fs.rm(DBFS_BASE_PATH, recurse=True)
+        print(f"   ✓ Removed DBFS path: {DBFS_BASE_PATH}")
+    except Exception as e:
+        print(f"   ⚠ Path not found or already clean: {e}")
+    
+    print("\n3. Cleaning metadata tables...")
+    
+    # Clean ingestion_config
+    try:
+        deleted = spark.sql(f"""
+            DELETE FROM {INGESTION_CONFIG_TABLE}
+            WHERE group_name = '{TEST_GROUP_NAME}'
+        """)
+        print(f"   ✓ Cleaned {INGESTION_CONFIG_TABLE}")
+    except Exception as e:
+        print(f"   ⚠ Could not clean ingestion_config: {e}")
+    
+    # Clean ingestion_metadata
+    try:
+        deleted = spark.sql(f"""
+            DELETE FROM {INGESTION_METADATA_TABLE}
+            WHERE table_name LIKE '{TEST_CATALOG}.{TEST_SCHEMA}.%'
+        """)
+        print(f"   ✓ Cleaned {INGESTION_METADATA_TABLE}")
+    except Exception as e:
+        print(f"   ⚠ Could not clean ingestion_metadata: {e}")
+    
+    # Clean ingestion_audit
+    try:
+        deleted = spark.sql(f"""
+            DELETE FROM {INGESTION_AUDIT_TABLE}
+            WHERE group_name = '{TEST_GROUP_NAME}'
+        """)
+        print(f"   ✓ Cleaned {INGESTION_AUDIT_TABLE}")
+    except Exception as e:
+        print(f"   ⚠ Could not clean ingestion_audit: {e}")
+    
+    print("\n✓ Cleanup completed! Ready for fresh test setup.")
+    print("=" * 80)
+else:
+    print("\n⚠ Cleanup skipped (CLEAN_ALL = False)")
+    print("   WARNING: Re-running without cleanup will create duplicate metadata entries!")
+    print("=" * 80)
 
 # COMMAND ----------
 
@@ -231,35 +298,46 @@ print(f"✓ Created CSV file (with header): {sales_metrics_path}")
 
 # DBTITLE 1,Create Target Delta Tables
 
-# Table 1: Orders
+# IMPORTANT: Target tables must have _aud_batch_load_id column for validation to work
+# This column is typically added during ingestion process
+
+# Table 1: Orders (with audit column)
 orders_target = f"{TEST_CATALOG}.{TEST_SCHEMA}.orders"
-orders_df.write.mode("overwrite").format("delta").saveAsTable(orders_target)
+orders_df_with_audit = orders_df.withColumn("_aud_batch_load_id", lit(BATCH_LOAD_ID))
+orders_df_with_audit.write.mode("overwrite").format("delta").saveAsTable(orders_target)
 print(f"✓ Created target table: {orders_target}")
 
-# Table 2: Inventory
+# Table 2: Inventory (with audit column)
 inventory_target = f"{TEST_CATALOG}.{TEST_SCHEMA}.inventory"
-inventory_df.write.mode("overwrite").format("delta").saveAsTable(inventory_target)
+inventory_df_with_audit = inventory_df.withColumn("_aud_batch_load_id", lit(BATCH_LOAD_ID))
+inventory_df_with_audit.write.mode("overwrite").format("delta").saveAsTable(inventory_target)
 print(f"✓ Created target table: {inventory_target}")
 
-# Table 3: Customers
+# Table 3: Customers (with audit column)
 customers_target = f"{TEST_CATALOG}.{TEST_SCHEMA}.customers"
-customers_df.write.mode("overwrite").format("delta").saveAsTable(customers_target)
+customers_df_with_audit = customers_df.withColumn("_aud_batch_load_id", lit(BATCH_LOAD_ID))
+customers_df_with_audit.write.mode("overwrite").format("delta").saveAsTable(customers_target)
 print(f"✓ Created target table: {customers_target}")
 
-# Table 4: Transactions
+# Table 4: Transactions (with audit column)
 transactions_target = f"{TEST_CATALOG}.{TEST_SCHEMA}.transactions"
-transactions_df.write.mode("overwrite").format("delta").saveAsTable(transactions_target)
+transactions_df_with_audit = transactions_df.withColumn("_aud_batch_load_id", lit(BATCH_LOAD_ID))
+transactions_df_with_audit.write.mode("overwrite").format("delta").saveAsTable(transactions_target)
 print(f"✓ Created target table: {transactions_target}")
 
-# Table 5: Employees
+# Table 5: Employees (with audit column)
 employees_target = f"{TEST_CATALOG}.{TEST_SCHEMA}.employees"
-employees_df.write.mode("overwrite").format("delta").saveAsTable(employees_target)
+employees_df_with_audit = employees_df.withColumn("_aud_batch_load_id", lit(BATCH_LOAD_ID))
+employees_df_with_audit.write.mode("overwrite").format("delta").saveAsTable(employees_target)
 print(f"✓ Created target table: {employees_target}")
 
-# Table 6: Sales Metrics
+# Table 6: Sales Metrics (with audit column)
 sales_metrics_target = f"{TEST_CATALOG}.{TEST_SCHEMA}.sales_metrics"
-sales_metrics_df.write.mode("overwrite").format("delta").saveAsTable(sales_metrics_target)
+sales_metrics_df_with_audit = sales_metrics_df.withColumn("_aud_batch_load_id", lit(BATCH_LOAD_ID))
+sales_metrics_df_with_audit.write.mode("overwrite").format("delta").saveAsTable(sales_metrics_target)
 print(f"✓ Created target table: {sales_metrics_target}")
+
+print(f"\n✓ All target tables created with _aud_batch_load_id = '{BATCH_LOAD_ID}'")
 
 # COMMAND ----------
 
@@ -443,6 +521,25 @@ print(f"✓ Inserted {len(metadata_entries)} entries into {INGESTION_METADATA_TA
 
 # DBTITLE 1,Insert into serving_ingestion_audit
 
+# Define schema for ingestion_audit (required because of None values)
+from pyspark.sql.types import StructType, StructField, StringType, TimestampType, IntegerType, LongType
+
+ingestion_audit_schema = StructType([
+    StructField('run_id', StringType(), True),
+    StructField('config_id', StringType(), True),
+    StructField('batch_load_id', StringType(), True),
+    StructField('group_name', StringType(), True),
+    StructField('target_table_name', StringType(), True),
+    StructField('operation_type', StringType(), True),
+    StructField('load_type', StringType(), True),
+    StructField('status', StringType(), True),
+    StructField('start_ts', TimestampType(), True),
+    StructField('end_ts', TimestampType(), True),
+    StructField('log_message', StringType(), True),
+    StructField('microbatch_id', IntegerType(), True),
+    StructField('row_count', LongType(), True),
+])
+
 # Create audit entries for each table
 audit_entries = []
 
@@ -474,8 +571,8 @@ for config_id, table_name, row_count in table_info:
         "row_count": row_count
     })
 
-# Create DataFrame and insert
-audit_df = spark.createDataFrame(audit_entries)
+# Create DataFrame with explicit schema (required for None values)
+audit_df = spark.createDataFrame(audit_entries, schema=ingestion_audit_schema)
 audit_df.write.mode("append").saveAsTable(INGESTION_AUDIT_TABLE)
 print(f"✓ Inserted {len(audit_entries)} entries into {INGESTION_AUDIT_TABLE}")
 
@@ -623,4 +720,135 @@ The framework will parse these and apply them when reading source files.
 """)
 
 print("\n✅ Ready for validation testing!")
+
+# COMMAND ----------
+
+# DBTITLE 1,Verification - Ensure No Duplicates
+
+print("\n" + "=" * 80)
+print("VERIFICATION: Checking for Duplicate Entries")
+print("=" * 80)
+
+all_good = True
+
+# Check 1: Ingestion Config (should be exactly 6)
+config_count = spark.sql(f"""
+    SELECT COUNT(*) as count 
+    FROM {INGESTION_CONFIG_TABLE}
+    WHERE group_name = '{TEST_GROUP_NAME}'
+""").collect()[0]['count']
+
+if config_count == 6:
+    print(f"\n✓ Ingestion Config: {config_count} entries (expected: 6)")
+else:
+    print(f"\n❌ Ingestion Config: {config_count} entries (expected: 6) - DUPLICATES DETECTED!")
+    all_good = False
+
+# Check 2: Ingestion Metadata (should be exactly 6)
+metadata_count = spark.sql(f"""
+    SELECT COUNT(*) as count 
+    FROM {INGESTION_METADATA_TABLE}
+    WHERE table_name LIKE '{TEST_CATALOG}.{TEST_SCHEMA}.%'
+""").collect()[0]['count']
+
+if metadata_count == 6:
+    print(f"✓ Ingestion Metadata: {metadata_count} entries (expected: 6)")
+else:
+    print(f"❌ Ingestion Metadata: {metadata_count} entries (expected: 6) - DUPLICATES DETECTED!")
+    all_good = False
+
+# Check 3: Ingestion Audit (should be exactly 6)
+audit_count = spark.sql(f"""
+    SELECT COUNT(*) as count 
+    FROM {INGESTION_AUDIT_TABLE}
+    WHERE group_name = '{TEST_GROUP_NAME}'
+""").collect()[0]['count']
+
+if audit_count == 6:
+    print(f"✓ Ingestion Audit: {audit_count} entries (expected: 6)")
+else:
+    print(f"❌ Ingestion Audit: {audit_count} entries (expected: 6) - DUPLICATES DETECTED!")
+    all_good = False
+
+# Check 4: Target tables have _aud_batch_load_id column
+print(f"\n✓ Checking target tables for _aud_batch_load_id column...")
+
+tables_to_check = ["orders", "inventory", "customers", "transactions", "employees", "sales_metrics"]
+missing_audit_col = []
+
+for table in tables_to_check:
+    try:
+        columns = spark.table(f"{TEST_CATALOG}.{TEST_SCHEMA}.{table}").columns
+        if "_aud_batch_load_id" in columns:
+            print(f"  ✓ {table}: Has _aud_batch_load_id column")
+        else:
+            print(f"  ❌ {table}: Missing _aud_batch_load_id column")
+            missing_audit_col.append(table)
+            all_good = False
+    except Exception as e:
+        print(f"  ❌ {table}: Table not found or error: {e}")
+        all_good = False
+
+# Check 5: Row counts match expected
+print(f"\n✓ Checking target table row counts...")
+
+expected_counts = {
+    "orders": 6,
+    "inventory": 5,
+    "customers": 5,
+    "transactions": 5,
+    "employees": 5,
+    "sales_metrics": 5
+}
+
+for table, expected in expected_counts.items():
+    try:
+        actual = spark.table(f"{TEST_CATALOG}.{TEST_SCHEMA}.{table}").count()
+        if actual == expected:
+            print(f"  ✓ {table}: {actual} rows (expected: {expected})")
+        else:
+            print(f"  ❌ {table}: {actual} rows (expected: {expected})")
+            all_good = False
+    except Exception as e:
+        print(f"  ❌ {table}: Error counting rows: {e}")
+        all_good = False
+
+# Check 6: All target rows have the correct batch_load_id
+print(f"\n✓ Checking batch_load_id values in target tables...")
+
+for table in tables_to_check:
+    try:
+        distinct_batches = spark.sql(f"""
+            SELECT DISTINCT _aud_batch_load_id 
+            FROM {TEST_CATALOG}.{TEST_SCHEMA}.{table}
+        """).collect()
+        
+        if len(distinct_batches) == 1 and distinct_batches[0]['_aud_batch_load_id'] == BATCH_LOAD_ID:
+            print(f"  ✓ {table}: All rows have batch_load_id = {BATCH_LOAD_ID}")
+        else:
+            print(f"  ❌ {table}: Multiple or incorrect batch_load_ids found")
+            for batch in distinct_batches:
+                print(f"     Found: {batch['_aud_batch_load_id']}")
+            all_good = False
+    except Exception as e:
+        print(f"  ⚠ {table}: Could not check batch_load_id: {e}")
+
+# Final verdict
+print("\n" + "=" * 80)
+if all_good:
+    print("✅ ALL VERIFICATION CHECKS PASSED!")
+    print("\nTest environment is ready:")
+    print("  • No duplicate metadata entries")
+    print("  • All target tables have _aud_batch_load_id column")
+    print("  • Row counts are correct")
+    print("  • Batch IDs are consistent")
+    print("\n✓ You can now proceed to run validation!")
+else:
+    print("❌ SOME VERIFICATION CHECKS FAILED!")
+    print("\nPlease review the errors above.")
+    print("Suggested actions:")
+    print("  1. Set CLEAN_ALL = True in the cleanup cell")
+    print("  2. Re-run the entire notebook from the beginning")
+    print("  3. Check for any errors during table creation")
+print("=" * 80)
 

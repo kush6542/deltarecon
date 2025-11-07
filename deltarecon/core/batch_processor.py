@@ -159,7 +159,7 @@ class BatchProcessor:
                 error_msg = (
                     f"Batch verification failed! "
                     f"Expected batches: {expected_set}, "
-                    f"Actual batches from ORC paths: {actual_set}"
+                    f"Actual batches from paths: {actual_set}"
                 )
                 self.logger.error(error_msg)
                 raise DataConsistencyError(error_msg)
@@ -254,7 +254,7 @@ class BatchProcessor:
             
             self.logger.info(f"Found {len(batch_mapping)} unprocessed batch(es): {list(batch_mapping.keys())}")
             for batch_id, paths in batch_mapping.items():
-                self.logger.info(f"  {batch_id}: {len(paths)} ORC file(s)")
+                self.logger.info(f"  {batch_id}: {len(paths)} file(s)")
             
             self.logger.clear_table_context()
             return batch_mapping

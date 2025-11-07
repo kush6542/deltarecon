@@ -343,12 +343,12 @@ except Exception as e:
 print("="*70)
 print("SOURCE DATA PREVIEW (first 5 rows)")
 print("="*70)
-display(source_df.limit(5))
+# display(source_df.limit(5))
 
 print("\n" + "="*70)
 print("TARGET DATA PREVIEW (first 5 rows)")
 print("="*70)
-display(target_df.limit(5))
+# display(target_df.limit(5))
 
 # COMMAND ----------
 

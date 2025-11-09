@@ -28,7 +28,7 @@ class TableConfig:
     source_table: str                   # e.g., "source_system.schema.sales_orders"
     
     # Processing mode
-    write_mode: str                     # "append", "overwrite", or "partition_overwrite"
+    write_mode: str                     # "append", "overwrite", "partition_overwrite", or "merge"
     
     # Source file configuration
     source_file_format: str             # REQUIRED: "orc", "csv", "text", etc.
@@ -63,10 +63,10 @@ class TableConfig:
         if not self.source_table:
             raise ConfigurationError("source_table cannot be empty")
         
-        if self.write_mode not in ["append", "overwrite", "partition_overwrite"]:
+        if self.write_mode not in ["append", "overwrite", "partition_overwrite", "merge"]:
             raise ConfigurationError(
                 f"Invalid write_mode: {self.write_mode}. "
-                f"Must be 'append', 'overwrite', or 'partition_overwrite'"
+                f"Must be 'append', 'overwrite', 'partition_overwrite', or 'merge'"
             )
         
         if not self.source_file_format:

@@ -251,7 +251,7 @@ class ValidationRunner:
             
             self.logger.info(f"Processing {total_batches} batch(es) individually (batch-level auditing)")
             
-            for batch_id, orc_paths in batch_mapping.items():
+            for batch_id, source_file_paths in batch_mapping.items():
                 try:
                     self.logger.log_section(f"BATCH: {batch_id}")
                     
@@ -262,7 +262,7 @@ class ValidationRunner:
                     
                     # Step 2b: Load source and target data for this batch only
                     self.logger.info(f"Step 2b: Loading data for batch {batch_id}...")
-                    src_df, tgt_df = loader.load_source_and_target(table_config, batch_id, orc_paths)
+                    src_df, tgt_df = loader.load_source_and_target(table_config, batch_id, source_file_paths)
                     
                     # Step 2c: Run validations for this batch
                     self.logger.info(f"Step 2c: Running validations for batch {batch_id}...")

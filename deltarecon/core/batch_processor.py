@@ -4,6 +4,7 @@ Batch processor - Identifies which batches need validation
 Logic:
 - For append mode: Process all unvalidated COMPLETED batches
 - For partition_overwrite mode: Process all unvalidated COMPLETED batches
+- For merge mode: Process all unvalidated COMPLETED batches
 - For overwrite mode: Process only latest COMPLETED batch
 - Skip batches that are already validated successfully
 - Supports batch-level auditing: returns batch-to-path mapping
@@ -46,7 +47,7 @@ class BatchProcessor:
             config: Table configuration
         
         Returns:
-            Tuple of (batch_ids, orc_paths)
+            Tuple of (batch_ids, source_file_paths)
         
         Raises:
             BatchProcessingError: If batch query fails
@@ -86,8 +87,8 @@ class BatchProcessor:
                             WHERE status = 'COMPLETED'
                                 AND target_table_name = '{config.table_name}'
                         ))
-                        -- For append/partition_overwrite modes: all batches
-                        OR t4.write_mode <> 'overwrite'
+                        -- For append/partition_overwrite/merge modes: all batches
+                        OR t4.write_mode IN ('append', 'partition_overwrite', 'merge')
                     )
                     AND (
                         -- Batch not validated OR last validation was not SUCCESS
@@ -104,18 +105,18 @@ class BatchProcessor:
                 self.logger.clear_table_context()
                 return [], []
             
-            # Extract batch IDs and ORC paths
+            # Extract batch IDs and source file paths
             batch_ids = list(set([row.batch_load_id for row in rows]))
-            orc_paths = [row.source_file_path for row in rows]
+            source_file_paths = [row.source_file_path for row in rows]
             
             self.logger.info(f"Found {len(batch_ids)} unprocessed batch(es): {batch_ids}")
-            self.logger.info(f"Total ORC files: {len(orc_paths)}")
+            self.logger.info(f"Total source files: {len(source_file_paths)}")
             
             # Verify batch-to-path mapping
-            self._verify_batch_mapping(config.table_name, batch_ids, orc_paths)
+            self._verify_batch_mapping(config.table_name, batch_ids, source_file_paths)
             
             self.logger.clear_table_context()
-            return batch_ids, orc_paths
+            return batch_ids, source_file_paths
             
         except Exception as e:
             self.logger.clear_table_context()
@@ -123,23 +124,23 @@ class BatchProcessor:
             self.logger.error(error_msg, exc_info=True)
             raise BatchProcessingError(error_msg)
     
-    def _verify_batch_mapping(self, table_name: str, batch_ids: List[str], orc_paths: List[str]):
+    def _verify_batch_mapping(self, table_name: str, batch_ids: List[str], source_file_paths: List[str]):
         """
-        Verify that ORC paths actually map to the expected batches
+        Verify that source file paths actually map to the expected batches
         
         This is a CRITICAL check to ensure we're validating the right data.
         
         Args:
             table_name: Table name
             batch_ids: Expected batch IDs
-            orc_paths: ORC file paths
+            source_file_paths: Source file paths
         
         Raises:
             DataConsistencyError: If batch mapping doesn't match
         """
         try:
             # Query metadata to verify paths map to expected batches
-            paths_str = "', '".join(orc_paths[:100])  # Check first 100 paths
+            paths_str = "', '".join(source_file_paths[:100])  # Check first 100 paths
             
             query = f"""
                 SELECT DISTINCT batch_load_id
@@ -159,7 +160,7 @@ class BatchProcessor:
                 error_msg = (
                     f"Batch verification failed! "
                     f"Expected batches: {expected_set}, "
-                    f"Actual batches from ORC paths: {actual_set}"
+                    f"Actual batches from paths: {actual_set}"
                 )
                 self.logger.error(error_msg)
                 raise DataConsistencyError(error_msg)
@@ -224,8 +225,8 @@ class BatchProcessor:
                             WHERE status = 'COMPLETED'
                                 AND target_table_name = '{config.table_name}'
                         ))
-                        -- For append/partition_overwrite modes: all batches
-                        OR t4.write_mode <> 'overwrite'
+                        -- For append/partition_overwrite/merge modes: all batches
+                        OR t4.write_mode IN ('append', 'partition_overwrite', 'merge')
                     )
                     AND (
                         -- Batch not validated OR last validation was not SUCCESS
@@ -254,7 +255,7 @@ class BatchProcessor:
             
             self.logger.info(f"Found {len(batch_mapping)} unprocessed batch(es): {list(batch_mapping.keys())}")
             for batch_id, paths in batch_mapping.items():
-                self.logger.info(f"  {batch_id}: {len(paths)} ORC file(s)")
+                self.logger.info(f"  {batch_id}: {len(paths)} file(s)")
             
             self.logger.clear_table_context()
             return batch_mapping

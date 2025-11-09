@@ -2,7 +2,7 @@
 Source and target data loader
 
 Loads:
-- Source data from ORC files with partition extraction
+- Source data from multiple formats (ORC, CSV, Text) with partition extraction
 - Target data from Delta tables with batch filtering
 
 CRITICAL: Includes verification that partition extraction doesn't lose/add rows.
@@ -10,9 +10,10 @@ CRITICAL: Includes verification that partition extraction doesn't lose/add rows.
 Note: Loaded via %run - TableConfig, exceptions, logger available in namespace
 """
 
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Optional
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.functions import col, regexp_extract
+from pyspark.sql.types import StructType
 
 from deltarecon.models.table_config import TableConfig
 from deltarecon.utils.exceptions import DataLoadError, DataConsistencyError
@@ -20,11 +21,35 @@ from deltarecon.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+def parse_schema_string(schema_str: str) -> StructType:
+    """
+    Parse schema string from source_file_options into PySpark StructType
+    
+    Example schema strings:
+    - "col1 string, col2 int, col3 date"
+    - "name STRING, age INT, salary DOUBLE"
+    
+    Args:
+        schema_str: Schema definition string
+    
+    Returns:
+        StructType object
+    
+    Raises:
+        ValueError: If schema string is invalid
+    """
+    try:
+        # PySpark can parse DDL-style schema strings directly
+        return StructType.fromDDL(schema_str)
+    except Exception as e:
+        raise ValueError(f"Failed to parse schema string: {schema_str}. Error: {str(e)}")
+
 class SourceTargetLoader:
     """
     Loads source and target data with verification
     
-    Source: ORC files with partition extraction
+    Source: ORC/CSV/Text files with partition extraction
     Target: Delta tables with batch filtering
     """
     
@@ -42,15 +67,15 @@ class SourceTargetLoader:
         self,
         config: TableConfig,
         batch_id: str,
-        orc_paths: List[str]
+        source_file_paths: List[str]
     ) -> Tuple[DataFrame, DataFrame]:
         """
-        Load source ORC and target Delta data for a single batch
+        Load source data (ORC/CSV/Text) and target Delta data for a single batch
         
         Args:
             config: Table configuration
             batch_id: Batch ID to validate (single batch for batch-level auditing)
-            orc_paths: ORC file paths for this batch
+            source_file_paths: Source file paths for this batch (format specified in config)
         
         Returns:
             Tuple of (source_df, target_df)
@@ -61,10 +86,11 @@ class SourceTargetLoader:
         """
         self.logger.set_table_context(config.table_name)
         self.logger.info(f"Loading data for batch: {batch_id}")
-        self.logger.info(f"  ORC files: {len(orc_paths)}")
+        self.logger.info(f"  Source files: {len(source_file_paths)}")
+        self.logger.info(f"  Source format: {config.source_file_format}")
         
         # Load source
-        source_df = self._load_source_orc(orc_paths, config)
+        source_df = self._load_source_data(source_file_paths, config)
         
         # Load target
         target_df = self._load_target_delta(config.table_name, batch_id)
@@ -75,30 +101,45 @@ class SourceTargetLoader:
         self.logger.clear_table_context()
         return source_df, target_df
     
-    def _load_source_orc(self, orc_paths: List[str], config: TableConfig) -> DataFrame:
+    def _load_source_data(self, file_paths: List[str], config: TableConfig) -> DataFrame:
         """
-        Load source ORC files with partition extraction
+        Load source data files with format detection and partition extraction
+        
+        Supports: ORC, CSV, Text
         
         Args:
-            orc_paths: List of ORC file paths
-            config: Table configuration
+            file_paths: List of source file paths
+            config: Table configuration with format and options
         
         Returns:
             DataFrame with partition columns added
         
         Raises:
-            DataLoadError: If ORC loading fails
+            DataLoadError: If data loading fails
             DataConsistencyError: If partition extraction verification fails
         """
-        self.logger.info("Loading source ORC files...")
+        file_format = config.source_file_format.lower()
+        self.logger.info(f"Loading source data files (format: {file_format})...")
         
         try:
-            # Read ORC files
-            df_original = self.spark.read.format("orc").load(orc_paths)
+            # Load files based on format
+            if file_format == "orc":
+                df_original = self._load_orc(file_paths)
+            elif file_format == "csv":
+                df_original = self._load_csv(file_paths, config.source_file_options)
+            elif file_format == "text":
+                df_original = self._load_text(file_paths, config.source_file_options)
+            else:
+                self.logger.warning(
+                    f"Unsupported source file format: {file_format}. "
+                    f"Supported formats: orc, csv, text. Skipping table."
+                )
+                raise DataLoadError(f"Unsupported file format: {file_format}")
+            
             original_count = df_original.count()
             original_cols = set(df_original.columns)
             
-            self.logger.info(f"  Original ORC data: {original_count:,} rows, {len(original_cols)} columns")
+            self.logger.info(f"  Original data: {original_count:,} rows, {len(original_cols)} columns")
             
             # Extract partitions if configured
             if config.is_partitioned:
@@ -152,9 +193,72 @@ class SourceTargetLoader:
             raise
         except Exception as e:
             self.logger.clear_table_context()
-            error_msg = f"Failed to load source ORC files: {str(e)}"
+            error_msg = f"Failed to load source data files: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             raise DataLoadError(error_msg)
+    
+    def _load_orc(self, file_paths: List[str]) -> DataFrame:
+        """
+        Load ORC files
+        
+        Args:
+            file_paths: List of ORC file paths
+        
+        Returns:
+            DataFrame
+        """
+        return self.spark.read.format("orc").load(file_paths)
+    
+    def _load_csv(self, file_paths: List[str], options: Dict) -> DataFrame:
+        """
+        Load CSV files with options
+        
+        Args:
+            file_paths: List of CSV file paths
+            options: CSV read options (header, sep, schema, quote, escape, etc.)
+        
+        Returns:
+            DataFrame
+        """
+        reader = self.spark.read.format("csv")
+        
+        # Apply common CSV options
+        if "header" in options:
+            reader = reader.option("header", options["header"])
+        if "sep" in options:
+            reader = reader.option("sep", options["sep"])
+        if "quote" in options:
+            reader = reader.option("quote", options["quote"])
+        if "escape" in options:
+            reader = reader.option("escape", options["escape"])
+        if "multiline" in options:
+            reader = reader.option("multiline", options["multiline"])
+        
+        # Apply schema if provided
+        if "schema" in options:
+            try:
+                schema = parse_schema_string(options["schema"])
+                reader = reader.schema(schema)
+                self.logger.info(f"  Applied explicit schema from options")
+            except ValueError as e:
+                self.logger.warning(f"Failed to parse schema: {e}. Will infer schema.")
+        
+        return reader.load(file_paths)
+    
+    def _load_text(self, file_paths: List[str], options: Dict) -> DataFrame:
+        """
+        Load text files with options (essentially CSV with different defaults)
+        
+        Args:
+            file_paths: List of text file paths
+            options: Text read options (header, sep, schema, quote, escape, etc.)
+        
+        Returns:
+            DataFrame
+        """
+        # Text files are just CSV with different separators
+        # Reuse CSV loader
+        return self._load_csv(file_paths, options)
     
     def _extract_partitions(self, df: DataFrame, config: TableConfig) -> DataFrame:
         """

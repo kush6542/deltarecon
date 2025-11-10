@@ -69,6 +69,12 @@ class TableConfig:
                 f"Must be 'append', 'overwrite', 'partition_overwrite', or 'merge'"
             )
         
+        if self.write_mode == "partition_overwrite" and not self.is_partitioned:
+            raise ConfigurationError(
+                f"write_mode='partition_overwrite' requires partition_columns to be defined. "
+                f"Table: {self.table_name}"
+            )
+        
         if not self.source_file_format:
             raise ConfigurationError("source_file_format cannot be empty")
         

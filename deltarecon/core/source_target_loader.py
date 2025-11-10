@@ -93,10 +93,10 @@ class SourceTargetLoader:
         source_df = self._load_source_data(source_file_paths, config)
         
         # Load target
-        target_df = self._load_target_delta(config.table_name, batch_id)
+        target_df = self._load_target_delta(config, batch_id)
         
         # Verify batch IDs match
-        self._verify_batch_consistency(source_df, target_df, batch_id, config.table_name)
+        self._verify_batch_consistency(source_df, target_df, batch_id, config)
         
         self.logger.clear_table_context()
         return source_df, target_df
@@ -300,39 +300,105 @@ class SourceTargetLoader:
         
         return result_df
     
-    def _load_target_delta(self, table_name: str, batch_id: str) -> DataFrame:
+    def _load_target_delta(self, config: TableConfig, batch_id: str) -> DataFrame:
         """
-        Load target Delta table with batch filtering for a single batch
+        Load target Delta table with appropriate filtering based on write mode
+        
+        Logic:
+        - overwrite mode: Load ALL data (no batch filter) - entire table IS the batch
+        - append/partition_overwrite/merge: Filter by batch_id - batches coexist
+        
+        Uses SQL WHERE clause for predicate pushdown and Delta data skipping.
         
         Args:
-            table_name: Fully qualified table name
-            batch_id: Batch ID to filter (single batch)
+            config: Table configuration (includes write_mode, partition info)
+            batch_id: Batch ID to validate
         
         Returns:
             Filtered DataFrame
         
         Raises:
-            DataLoadError: If Delta loading fails
+            DataLoadError: If loading fails
+            ConfigurationError: If partition_overwrite used without partitions
         """
         self.logger.info(f"Loading target Delta table")
+        self.logger.info(f"  Write mode: {config.write_mode}")
+        self.logger.info(f"  Partitioned: {config.is_partitioned}")
         
         try:
-            # Read Delta table
-            df = self.spark.table(table_name)
+            # Validation: partition_overwrite requires partitions
+            if config.write_mode == "partition_overwrite" and not config.is_partitioned:
+                from deltarecon.utils.exceptions import ConfigurationError
+                error_msg = (
+                    f"Invalid configuration for {config.table_name}: "
+                    f"write_mode='partition_overwrite' requires partition_columns to be defined. "
+                    f"Either add partition_columns or change write_mode."
+                )
+                self.logger.error(error_msg)
+                raise ConfigurationError(error_msg)
             
-            # Apply batch filter for single batch
-            self.logger.info(f"  Applying filter: _aud_batch_load_id = '{batch_id}'")
+            # Determine filtering strategy based on write mode
+            if config.write_mode == "overwrite":
+                # OVERWRITE mode: Entire table is replaced each ingestion
+                # The current table IS the latest batch - no filtering needed
+                self.logger.info(f"  Overwrite mode: Loading ALL data (entire table = batch)")
+                
+                df_filtered = self.spark.sql(f"SELECT * FROM {config.table_name}")
+                
+                # Safety check: log actual batch IDs in table
+                actual_batches = [row['_aud_batch_load_id'] for row in 
+                                df_filtered.select("_aud_batch_load_id").distinct().limit(5).collect()]
+                self.logger.info(f"  Actual batch_ids in table: {actual_batches}")
+                
+                if batch_id not in actual_batches:
+                    self.logger.warning(
+                        f"Validating batch '{batch_id}' but table contains {actual_batches}. "
+                        f"This is expected for overwrite mode - entire current table represents this batch."
+                    )
             
-            df_filtered = df.filter(f"_aud_batch_load_id = '{batch_id}'")
+            elif config.write_mode in ["append", "merge", "partition_overwrite"]:
+                # APPEND/MERGE/PARTITION_OVERWRITE: Multiple batches coexist
+                # Filter by batch_id to isolate this batch's data
+                self.logger.info(f"  {config.write_mode.upper()} mode: Filtering by batch_id = '{batch_id}'")
+                
+                # Use SQL WHERE clause for predicate pushdown and data skipping
+                df_filtered = self.spark.sql(f"""
+                    SELECT * FROM {config.table_name}
+                    WHERE _aud_batch_load_id = '{batch_id}'
+                """)
+                
+                # For partition_overwrite, log caveat
+                if config.write_mode == "partition_overwrite":
+                    self.logger.info(f"  Partition columns: {config.partition_columns}")
+                    self.logger.info(
+                        f"  Note: If this batch's partitions were overwritten by a later batch, "
+                        f"the filter will return incomplete data. Ensure batches are validated "
+                        f"before their partitions are overwritten."
+                    )
+            
+            else:
+                error_msg = f"Unsupported write_mode: {config.write_mode}"
+                self.logger.error(error_msg)
+                raise DataLoadError(error_msg)
             
             target_count = df_filtered.count()
             self.logger.info(f"  Target data: {target_count:,} rows")
+            
+            # Safety check: warn if no data found
+            if target_count == 0:
+                self.logger.warning(
+                    f"No data found in target table for batch '{batch_id}'. "
+                    f"Possible causes: "
+                    f"1) Batch was overwritten (if overwrite/partition_overwrite mode), "
+                    f"2) Ingestion failed, "
+                    f"3) Filter mismatch"
+                )
             
             return df_filtered
             
         except Exception as e:
             self.logger.clear_table_context()
-            error_msg = f"Failed to load target Delta table {table_name}: {str(e)}"
+            error_msg = f"Failed to load target Delta table {config.table_name}: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             raise DataLoadError(error_msg)
     
@@ -341,30 +407,36 @@ class SourceTargetLoader:
         source_df: DataFrame,
         target_df: DataFrame,
         expected_batch: str,
-        table_name: str
+        config: TableConfig
     ):
         """
-        Verify target Delta has only the expected batch
+        Verify target Delta has expected batch data
         
-        CRITICAL: Ensures filter worked correctly for single batch.
+        For overwrite mode: Skip verification (entire table is the batch)
+        For other modes: Verify only expected batch exists
         
         Args:
             source_df: Source DataFrame
             target_df: Target DataFrame
             expected_batch: Expected batch ID (single batch)
-            table_name: Table name for logging
+            config: Table configuration
         
         Raises:
             DataConsistencyError: If batch doesn't match
         """
+        # Skip verification for overwrite mode
+        if config.write_mode == "overwrite":
+            self.logger.info(f"  Overwrite mode: Skipping batch consistency check (entire table = batch)")
+            return
+        
         try:
-            # Verify target batch
+            # Verify target batch for append/merge/partition_overwrite
             target_batches = target_df.select("_aud_batch_load_id").distinct().collect()
             actual_batches = [row['_aud_batch_load_id'] for row in target_batches]
             
             if len(actual_batches) == 0:
                 error_msg = (
-                    f"Target has no data for batch {expected_batch} in {table_name}! "
+                    f"Target has no data for batch {expected_batch} in {config.table_name}! "
                     f"Filter not working correctly."
                 )
                 self.logger.error(error_msg)
@@ -372,7 +444,7 @@ class SourceTargetLoader:
             
             if len(actual_batches) > 1:
                 error_msg = (
-                    f"Target has multiple batches for {table_name}! "
+                    f"Target has multiple batches for {config.table_name}! "
                     f"Expected: {expected_batch}, Got: {actual_batches}. "
                     f"Filter not working correctly."
                 )
@@ -381,7 +453,7 @@ class SourceTargetLoader:
             
             if actual_batches[0] != expected_batch:
                 error_msg = (
-                    f"Target batch mismatch for {table_name}! "
+                    f"Target batch mismatch for {config.table_name}! "
                     f"Expected: {expected_batch}, Got: {actual_batches[0]}. "
                     f"Filter not working correctly."
                 )

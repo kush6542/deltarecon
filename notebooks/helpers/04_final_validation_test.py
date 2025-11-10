@@ -590,48 +590,70 @@ audit_entries = []
 # OVERWRITE table audit entries
 for batch_id in [BATCH_1_ID, BATCH_2_ID]:
     audit_entries.append({
-        "batch_load_id": batch_id,
+        "run_id": batch_id,  # Using batch_id as run_id
         "config_id": config_id_1,
+        "batch_load_id": batch_id,
         "group_name": TEST_GROUP,
         "target_table_name": overwrite_table,
+        "operation_type": "INGESTION",
+        "load_type": "hive_full",
         "status": "SUCCESS",
-        "row_count": 2 if batch_id == BATCH_2_ID else 4,
-        "start_time": datetime.now(),
-        "end_time": datetime.now(),
-        "insert_ts": datetime.now()
+        "start_ts": datetime.now(),
+        "end_ts": datetime.now(),
+        "log_message": None,
+        "microbatch_id": None,
+        "row_count": 2 if batch_id == BATCH_2_ID else 4
     })
 
 # PARTITION_OVERWRITE table audit entries
 for batch_id, row_count in [(BATCH_1_ID, 4), (BATCH_2_ID, 2)]:
     audit_entries.append({
-        "batch_load_id": batch_id,
+        "run_id": batch_id,
         "config_id": config_id_2,
+        "batch_load_id": batch_id,
         "group_name": TEST_GROUP,
         "target_table_name": partition_overwrite_table,
+        "operation_type": "INGESTION",
+        "load_type": "incremental",
         "status": "SUCCESS",
-        "row_count": row_count,
-        "start_time": datetime.now(),
-        "end_time": datetime.now(),
-        "insert_ts": datetime.now()
+        "start_ts": datetime.now(),
+        "end_ts": datetime.now(),
+        "log_message": None,
+        "microbatch_id": None,
+        "row_count": row_count
     })
 
 # APPEND table audit entries
 for batch_id, row_count in [(BATCH_1_ID, 4), (BATCH_2_ID, 2), (BATCH_3_ID, 3)]:
     audit_entries.append({
-        "batch_load_id": batch_id,
+        "run_id": batch_id,
         "config_id": config_id_3,
+        "batch_load_id": batch_id,
         "group_name": TEST_GROUP,
         "target_table_name": append_table,
+        "operation_type": "INGESTION",
+        "load_type": "incremental",
         "status": "SUCCESS",
-        "row_count": row_count,
-        "start_time": datetime.now(),
-        "end_time": datetime.now(),
-        "insert_ts": datetime.now()
+        "start_ts": datetime.now(),
+        "end_ts": datetime.now(),
+        "log_message": None,
+        "microbatch_id": None,
+        "row_count": row_count
     })
 
-# Insert audit entries
-audit_df = spark.createDataFrame(audit_entries)
-audit_df.write.mode("append").saveAsTable(INGESTION_AUDIT_TABLE)
+# Insert audit entries - Use SQL INSERT to handle None values
+print("\nInserting audit entries...")
+for entry in audit_entries:
+    spark.sql(f"""
+        INSERT INTO {INGESTION_AUDIT_TABLE}
+        (run_id, config_id, batch_load_id, group_name, target_table_name,
+         operation_type, load_type, status, start_ts, end_ts, log_message, microbatch_id, row_count)
+        VALUES
+        ('{entry["run_id"]}', '{entry["config_id"]}', '{entry["batch_load_id"]}', 
+         '{entry["group_name"]}', '{entry["target_table_name"]}',
+         '{entry["operation_type"]}', '{entry["load_type"]}', '{entry["status"]}',
+         current_timestamp(), current_timestamp(), NULL, NULL, {entry["row_count"]})
+    """)
 print(f"✓ Inserted {len(audit_entries)} entries into {INGESTION_AUDIT_TABLE}")
 
 print(f"\n✓ All metadata inserted successfully")

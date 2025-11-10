@@ -32,19 +32,20 @@ print("="*80)
 print("FINAL VALIDATION TEST - PRODUCTION CONFIGURATION")
 print("="*80)
 
-# Production-style configuration with timestamp
-RUN_ID = datetime.now().strftime('%Y%m%d_%H%M%S')
+# Production-style configuration with timestamp (unique per run)
+RUN_TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
+RUN_ID = f"final_v2_{RUN_TIMESTAMP}"  # Version 2 to avoid conflicts
 TEST_CATALOG = "ts42_demo"
-TEST_SCHEMA = f"prod_val_test_{RUN_ID}"
-TEST_GROUP = f"prod_validation_{RUN_ID}"
+TEST_SCHEMA = f"final_validation_{RUN_TIMESTAMP}"
+TEST_GROUP = f"final_val_test_{RUN_TIMESTAMP}"
 
-# Generate batch IDs (production style: BATCH_YYYYMMDD_HHMMSS)
-BATCH_1_ID = f"BATCH_{datetime.now().strftime('%Y%m%d_%H%M%S')}_001"
-BATCH_2_ID = f"BATCH_{datetime.now().strftime('%Y%m%d_%H%M%S')}_002"
-BATCH_3_ID = f"BATCH_{datetime.now().strftime('%Y%m%d_%H%M%S')}_003"
+# Generate batch IDs (production style: BATCH_YYYYMMDD_HHMMSS_NNN)
+BATCH_1_ID = f"BATCH_{RUN_TIMESTAMP}_001"
+BATCH_2_ID = f"BATCH_{RUN_TIMESTAMP}_002"
+BATCH_3_ID = f"BATCH_{RUN_TIMESTAMP}_003"
 
 # Production-style DBFS paths
-DBFS_ROOT = f"/FileStore/prod_validation_{RUN_ID}"
+DBFS_ROOT = f"/FileStore/final_validation_v2_{RUN_TIMESTAMP}"
 SOURCE_BASE_PATH = f"{DBFS_ROOT}/source_data"
 
 # Metadata tables (actual production tables)
@@ -75,7 +76,7 @@ if CLEAN_ALL:
     print("\n1. Finding and dropping old test schemas...")
     try:
         old_schemas = spark.sql(f"""
-            SHOW SCHEMAS IN {TEST_CATALOG} LIKE 'prod_val_test%'
+            SHOW SCHEMAS IN {TEST_CATALOG} LIKE 'final_validation%'
         """).collect()
         
         for row in old_schemas:
@@ -94,7 +95,7 @@ if CLEAN_ALL:
         base_dir = "/FileStore/"
         files = dbutils.fs.ls(base_dir)
         for f in files:
-            if "prod_validation_" in f.name:
+            if "final_validation" in f.name:
                 try:
                     dbutils.fs.rm(f.path, recurse=True)
                     print(f"   ✓ Removed: {f.path}")
@@ -109,11 +110,11 @@ if CLEAN_ALL:
     try:
         spark.sql(f"""
             DELETE FROM {INGESTION_CONFIG_TABLE} 
-            WHERE group_name LIKE 'prod_validation_%'
+            WHERE group_name LIKE 'final_val_test%'
         """)
         config_count = spark.sql(f"""
             SELECT COUNT(*) as count FROM {INGESTION_CONFIG_TABLE}
-            WHERE group_name LIKE 'prod_validation_%'
+            WHERE group_name LIKE 'final_val_test%'
         """).collect()[0]['count']
         print(f"   ✓ Cleaned {INGESTION_CONFIG_TABLE} (remaining: {config_count})")
     except Exception as e:
@@ -123,11 +124,11 @@ if CLEAN_ALL:
     try:
         spark.sql(f"""
             DELETE FROM {INGESTION_METADATA_TABLE} 
-            WHERE table_name LIKE '{TEST_CATALOG}.prod_val_test%'
+            WHERE table_name LIKE '{TEST_CATALOG}.final_validation%'
         """)
         metadata_count = spark.sql(f"""
             SELECT COUNT(*) as count FROM {INGESTION_METADATA_TABLE}
-            WHERE table_name LIKE '{TEST_CATALOG}.prod_val_test%'
+            WHERE table_name LIKE '{TEST_CATALOG}.final_validation%'
         """).collect()[0]['count']
         print(f"   ✓ Cleaned {INGESTION_METADATA_TABLE} (remaining: {metadata_count})")
     except Exception as e:
@@ -137,11 +138,11 @@ if CLEAN_ALL:
     try:
         spark.sql(f"""
             DELETE FROM {INGESTION_AUDIT_TABLE} 
-            WHERE group_name LIKE 'prod_validation_%'
+            WHERE group_name LIKE 'final_val_test%'
         """)
         audit_count = spark.sql(f"""
             SELECT COUNT(*) as count FROM {INGESTION_AUDIT_TABLE}
-            WHERE group_name LIKE 'prod_validation_%'
+            WHERE group_name LIKE 'final_val_test%'
         """).collect()[0]['count']
         print(f"   ✓ Cleaned {INGESTION_AUDIT_TABLE} (remaining: {audit_count})")
     except Exception as e:
@@ -483,6 +484,7 @@ def get_file_metadata_recursive(path):
 print("\nInserting config entries...")
 
 # OVERWRITE table config
+config_id_1 = f"FINAL_TEST_001_{RUN_TIMESTAMP}"
 spark.sql(f"""
     INSERT INTO {INGESTION_CONFIG_TABLE} 
     (config_id, group_name, source_schema, source_table, source_file_path, 
@@ -490,13 +492,14 @@ spark.sql(f"""
      load_type, write_mode, primary_key, partition_column, partitioning_strategy,
      frequency, table_size_gb, is_active, deduplicate, clean_column_names, insert_ts, last_update_ts)
     VALUES 
-    ('PROD_TEST_001_{RUN_ID}', '{TEST_GROUP}', 'source_transactions', 'transaction_summary', 
+    ('{config_id_1}', '{TEST_GROUP}', 'source_transactions', 'transaction_summary', 
      '{overwrite_source_path}', '{TEST_CATALOG}', '{TEST_SCHEMA}', 'transaction_summary', 
      'orc', NULL, 'hive_full', 'overwrite', 'order_id', NULL, NULL,
      'daily', '1', 'Y', 'N', 'N', current_timestamp(), current_timestamp())
 """)
 
 # PARTITION_OVERWRITE table config
+config_id_2 = f"FINAL_TEST_002_{RUN_TIMESTAMP}"
 spark.sql(f"""
     INSERT INTO {INGESTION_CONFIG_TABLE} 
     (config_id, group_name, source_schema, source_table, source_file_path, 
@@ -504,13 +507,14 @@ spark.sql(f"""
      load_type, write_mode, primary_key, partition_column, partitioning_strategy,
      frequency, table_size_gb, is_active, deduplicate, clean_column_names, insert_ts, last_update_ts)
     VALUES 
-    ('PROD_TEST_002_{RUN_ID}', '{TEST_GROUP}', 'source_orders', 'daily_orders', 
+    ('{config_id_2}', '{TEST_GROUP}', 'source_orders', 'daily_orders', 
      '{partition_overwrite_source_path}', '{TEST_CATALOG}', '{TEST_SCHEMA}', 'daily_orders_partitioned', 
      'orc', NULL, 'incremental', 'partition_overwrite', 'order_id', 'partition_date', 'PARTITIONED_BY',
      'daily', '1', 'Y', 'N', 'N', current_timestamp(), current_timestamp())
 """)
 
 # APPEND table config
+config_id_3 = f"FINAL_TEST_003_{RUN_TIMESTAMP}"
 spark.sql(f"""
     INSERT INTO {INGESTION_CONFIG_TABLE} 
     (config_id, group_name, source_schema, source_table, source_file_path, 
@@ -518,7 +522,7 @@ spark.sql(f"""
      load_type, write_mode, primary_key, partition_column, partitioning_strategy,
      frequency, table_size_gb, is_active, deduplicate, clean_column_names, insert_ts, last_update_ts)
     VALUES 
-    ('PROD_TEST_003_{RUN_ID}', '{TEST_GROUP}', 'source_history', 'order_history', 
+    ('{config_id_3}', '{TEST_GROUP}', 'source_history', 'order_history', 
      '{append_source_path}', '{TEST_CATALOG}', '{TEST_SCHEMA}', 'order_history', 
      'orc', NULL, 'incremental', 'append', 'order_id', 'partition_date', 'PARTITIONED_BY',
      'daily', '1', 'Y', 'N', 'N', current_timestamp(), current_timestamp())
@@ -539,7 +543,7 @@ for batch_id, batch_path in [(BATCH_1_ID, batch1_ow_path), (BATCH_2_ID, batch2_o
             "source_file_path": file_path,
             "file_modification_time": mod_time,
             "file_size": file_size,
-            "config_id": f"PROD_TEST_001_{RUN_ID}",
+            "config_id": config_id_1,
             "is_processed": "Y",
             "insert_ts": datetime.now(),
             "last_update_ts": datetime.now()
@@ -555,7 +559,7 @@ for batch_id, batch_path in [(BATCH_1_ID, batch1_po_path), (BATCH_2_ID, batch2_p
             "source_file_path": file_path,
             "file_modification_time": mod_time,
             "file_size": file_size,
-            "config_id": f"PROD_TEST_002_{RUN_ID}",
+            "config_id": config_id_2,
             "is_processed": "Y",
             "insert_ts": datetime.now(),
             "last_update_ts": datetime.now()
@@ -571,7 +575,7 @@ for batch_id, batch_path in [(BATCH_1_ID, batch1_ap_path), (BATCH_2_ID, batch2_a
             "source_file_path": file_path,
             "file_modification_time": mod_time,
             "file_size": file_size,
-            "config_id": f"PROD_TEST_003_{RUN_ID}",
+            "config_id": config_id_3,
             "is_processed": "Y",
             "insert_ts": datetime.now(),
             "last_update_ts": datetime.now()
@@ -590,7 +594,7 @@ audit_entries = []
 for batch_id in [BATCH_1_ID, BATCH_2_ID]:
     audit_entries.append({
         "batch_load_id": batch_id,
-        "config_id": f"PROD_TEST_001_{RUN_ID}",
+        "config_id": config_id_1,
         "group_name": TEST_GROUP,
         "target_table_name": overwrite_table,
         "status": "SUCCESS",
@@ -604,7 +608,7 @@ for batch_id in [BATCH_1_ID, BATCH_2_ID]:
 for batch_id, row_count in [(BATCH_1_ID, 4), (BATCH_2_ID, 2)]:
     audit_entries.append({
         "batch_load_id": batch_id,
-        "config_id": f"PROD_TEST_002_{RUN_ID}",
+        "config_id": config_id_2,
         "group_name": TEST_GROUP,
         "target_table_name": partition_overwrite_table,
         "status": "SUCCESS",
@@ -618,7 +622,7 @@ for batch_id, row_count in [(BATCH_1_ID, 4), (BATCH_2_ID, 2)]:
 for batch_id, row_count in [(BATCH_1_ID, 4), (BATCH_2_ID, 2), (BATCH_3_ID, 3)]:
     audit_entries.append({
         "batch_load_id": batch_id,
-        "config_id": f"PROD_TEST_003_{RUN_ID}",
+        "config_id": config_id_3,
         "group_name": TEST_GROUP,
         "target_table_name": append_table,
         "status": "SUCCESS",
@@ -647,7 +651,7 @@ print("="*80)
 runner = ValidationRunner(
     spark=spark,
     table_group=TEST_GROUP,
-    iteration_suffix=f"final_test_{RUN_ID}",
+    iteration_suffix=f"final_v2_{RUN_TIMESTAMP}",
     is_full_validation=True
 )
 

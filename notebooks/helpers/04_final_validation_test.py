@@ -543,7 +543,6 @@ for batch_id, batch_path in [(BATCH_1_ID, batch1_ow_path), (BATCH_2_ID, batch2_o
             "source_file_path": file_path,
             "file_modification_time": mod_time,
             "file_size": file_size,
-            "config_id": config_id_1,
             "is_processed": "Y",
             "insert_ts": datetime.now(),
             "last_update_ts": datetime.now()
@@ -559,7 +558,6 @@ for batch_id, batch_path in [(BATCH_1_ID, batch1_po_path), (BATCH_2_ID, batch2_p
             "source_file_path": file_path,
             "file_modification_time": mod_time,
             "file_size": file_size,
-            "config_id": config_id_2,
             "is_processed": "Y",
             "insert_ts": datetime.now(),
             "last_update_ts": datetime.now()
@@ -575,7 +573,6 @@ for batch_id, batch_path in [(BATCH_1_ID, batch1_ap_path), (BATCH_2_ID, batch2_a
             "source_file_path": file_path,
             "file_modification_time": mod_time,
             "file_size": file_size,
-            "config_id": config_id_3,
             "is_processed": "Y",
             "insert_ts": datetime.now(),
             "last_update_ts": datetime.now()

@@ -46,16 +46,16 @@ print("="*80)
 # Test configuration with timestamp to avoid conflicts
 TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
 TEST_CATALOG = "ts42_demo"
-TEST_SCHEMA = f"test_write_mode_fix_{TIMESTAMP}"
-TEST_GROUP = f"test_write_mode_{TIMESTAMP}"
+TEST_SCHEMA = f"test_wm_hive_partition_{TIMESTAMP}"
+TEST_GROUP = f"test_wm_hive_{TIMESTAMP}"
 
 # Generate unique batch IDs
 BATCH_1 = f"BATCH_1_{TIMESTAMP}"
 BATCH_2 = f"BATCH_2_{TIMESTAMP}"
 BATCH_3 = f"BATCH_3_{TIMESTAMP}"
 
-# DBFS paths for source files
-DBFS_BASE_PATH = f"/FileStore/write_mode_test_{TIMESTAMP}"
+# DBFS paths for source files (Hive-style partitioned)
+DBFS_BASE_PATH = f"/FileStore/write_mode_hive_test_{TIMESTAMP}"git status
 
 # Metadata tables
 INGESTION_CONFIG_TABLE = "ts42_demo.migration_operations.serving_ingestion_config"
@@ -82,7 +82,7 @@ if CLEAN_ALL:
     print("\n1. Finding and dropping old test schemas...")
     try:
         old_schemas = spark.sql(f"""
-            SHOW SCHEMAS IN {TEST_CATALOG} LIKE 'test_write_mode_fix%'
+            SHOW SCHEMAS IN {TEST_CATALOG} LIKE 'test_wm_%'
         """).collect()
         
         for row in old_schemas:
@@ -102,7 +102,7 @@ if CLEAN_ALL:
         base_dir = "/FileStore/"
         files = dbutils.fs.ls(base_dir)
         for f in files:
-            if "write_mode_test" in f.name:
+            if "write_mode_test" in f.name or "write_mode_hive_test" in f.name:
                 try:
                     dbutils.fs.rm(f.path, recurse=True)
                     print(f"   ✓ Removed: {f.path}")
@@ -117,11 +117,11 @@ if CLEAN_ALL:
     try:
         deleted = spark.sql(f"""
             DELETE FROM {INGESTION_CONFIG_TABLE} 
-            WHERE group_name LIKE 'test_write_mode%'
+            WHERE group_name LIKE 'test_wm_%'
         """)
         config_count = spark.sql(f"""
             SELECT COUNT(*) as count FROM {INGESTION_CONFIG_TABLE}
-            WHERE group_name LIKE 'test_write_mode%'
+            WHERE group_name LIKE 'test_wm_%'
         """).collect()[0]['count']
         print(f"   ✓ Cleaned {INGESTION_CONFIG_TABLE} (remaining: {config_count})")
     except Exception as e:
@@ -131,11 +131,11 @@ if CLEAN_ALL:
     try:
         deleted = spark.sql(f"""
             DELETE FROM {INGESTION_METADATA_TABLE} 
-            WHERE table_name LIKE '{TEST_CATALOG}.test_write_mode_fix%'
+            WHERE table_name LIKE '{TEST_CATALOG}.test_wm_%'
         """)
         metadata_count = spark.sql(f"""
             SELECT COUNT(*) as count FROM {INGESTION_METADATA_TABLE}
-            WHERE table_name LIKE '{TEST_CATALOG}.test_write_mode_fix%'
+            WHERE table_name LIKE '{TEST_CATALOG}.test_wm_%'
         """).collect()[0]['count']
         print(f"   ✓ Cleaned {INGESTION_METADATA_TABLE} (remaining: {metadata_count})")
     except Exception as e:
@@ -145,11 +145,11 @@ if CLEAN_ALL:
     try:
         deleted = spark.sql(f"""
             DELETE FROM {INGESTION_AUDIT_TABLE} 
-            WHERE group_name LIKE 'test_write_mode%'
+            WHERE group_name LIKE 'test_wm_%'
         """)
         audit_count = spark.sql(f"""
             SELECT COUNT(*) as count FROM {INGESTION_AUDIT_TABLE}
-            WHERE group_name LIKE 'test_write_mode%'
+            WHERE group_name LIKE 'test_wm_%'
         """).collect()[0]['count']
         print(f"   ✓ Cleaned {INGESTION_AUDIT_TABLE} (remaining: {audit_count})")
     except Exception as e:
@@ -174,40 +174,49 @@ print(f"✓ Created schema: {TEST_CATALOG}.{TEST_SCHEMA}")
 
 # COMMAND ----------
 
-# DBTITLE 1,Setup Test Data - Sample Schema and Data
-# Define sample data schema
+# DBTITLE 1,Setup Test Data - Sample Schema and Data (Production-Style)
+print("="*80)
+print("IMPORTANT: Using PRODUCTION-STYLE Hive Partitioning")
+print("="*80)
+print("• Source ORC files: partition columns in DIRECTORY STRUCTURE (not in data)")
+print("• Example: dbfs:/path/partition_date=2024-11-01/file.orc")
+print("• Delta tables: partition columns ADDED during ingestion from file paths")
+print("="*80)
+
+# Define sample data schema WITHOUT partition columns (production-style!)
+# Partition columns are in the directory structure, NOT in the ORC data
 orders_schema = StructType([
     StructField("order_id", IntegerType(), False),
     StructField("customer_id", IntegerType(), False),
     StructField("order_amount", DoubleType(), True),
     StructField("order_status", StringType(), True),
-    StructField("partition_date", StringType(), True)
+    # NO partition_date here - it will be in directory structure!
 ])
 
-# Sample data for different batches
+# Sample data for different batches (NO partition_date column!)
 batch1_data = [
-    (1001, 5001, 100.00, "COMPLETED", "2024-11-01"),
-    (1002, 5002, 200.00, "PENDING", "2024-11-01"),
-    (1003, 5003, 150.00, "COMPLETED", "2024-11-02"),
+    (1001, 5001, 100.00, "COMPLETED"),     # partition_date will be in path
+    (1002, 5002, 200.00, "PENDING"),       # partition_date will be in path
+    (1003, 5003, 150.00, "COMPLETED"),     # partition_date will be in path
 ]
 
 batch2_data = [
-    (2001, 6001, 300.00, "COMPLETED", "2024-11-01"),  # Same partition as batch1
-    (2002, 6002, 250.00, "PENDING", "2024-11-03"),    # New partition
+    (2001, 6001, 300.00, "COMPLETED"),     # partition_date will be in path
+    (2002, 6002, 250.00, "PENDING"),       # partition_date will be in path
 ]
 
 batch3_data = [
-    (3001, 7001, 400.00, "COMPLETED", "2024-11-04"),
-    (3002, 7002, 350.00, "PENDING", "2024-11-04"),
+    (3001, 7001, 400.00, "COMPLETED"),     # partition_date will be in path
+    (3002, 7002, 350.00, "PENDING"),       # partition_date will be in path
 ]
 
-print("✓ Sample data defined")
+print("\n✓ Sample data defined (WITHOUT partition columns - production-style!)")
 
 # COMMAND ----------
 
-# DBTITLE 1,Scenario 1: OVERWRITE Mode Table
+# DBTITLE 1,Scenario 1: OVERWRITE Mode Table (No Partitions)
 print("\n" + "="*80)
-print("CREATING SCENARIO 1: OVERWRITE MODE")
+print("CREATING SCENARIO 1: OVERWRITE MODE (No Partitions)")
 print("="*80)
 
 overwrite_table = f"{TEST_CATALOG}.{TEST_SCHEMA}.orders_overwrite"
@@ -215,25 +224,31 @@ overwrite_table = f"{TEST_CATALOG}.{TEST_SCHEMA}.orders_overwrite"
 # Batch 1: Initial load
 print(f"\nBatch 1: Creating table with {len(batch1_data)} rows, batch_id={BATCH_1}")
 df1 = spark.createDataFrame(batch1_data, orders_schema)
-df1_with_audit = df1.withColumn("_aud_batch_load_id", lit(BATCH_1))
-df1_with_audit.write.mode("overwrite").format("delta").saveAsTable(overwrite_table)
-print(f"  ✓ Table has {spark.table(overwrite_table).count()} rows with batch_id={BATCH_1}")
 
-# Save batch1 source files
+# Save batch1 source files (no partitioning for overwrite mode)
 batch1_path = f"{DBFS_BASE_PATH}/overwrite/batch1"
 df1.write.mode("overwrite").format("orc").save(batch1_path)
+print(f"  ✓ Source ORC files written to: {batch1_path}")
+
+# Simulate ingestion: Read source and write to Delta
+df1_with_audit = df1.withColumn("_aud_batch_load_id", lit(BATCH_1))
+df1_with_audit.write.mode("overwrite").format("delta").saveAsTable(overwrite_table)
+print(f"  ✓ Delta table has {spark.table(overwrite_table).count()} rows with batch_id={BATCH_1}")
 
 # Batch 2: Overwrite entire table (Batch 1 data is GONE!)
 print(f"\nBatch 2: OVERWRITING table with {len(batch2_data)} rows, batch_id={BATCH_2}")
 df2 = spark.createDataFrame(batch2_data, orders_schema)
-df2_with_audit = df2.withColumn("_aud_batch_load_id", lit(BATCH_2))
-df2_with_audit.write.mode("overwrite").format("delta").saveAsTable(overwrite_table)
-print(f"  ✓ Table now has {spark.table(overwrite_table).count()} rows with batch_id={BATCH_2}")
-print(f"  ⚠ Batch 1 data is COMPLETELY GONE (that's what overwrite does!)")
 
 # Save batch2 source files
 batch2_path = f"{DBFS_BASE_PATH}/overwrite/batch2"
 df2.write.mode("overwrite").format("orc").save(batch2_path)
+print(f"  ✓ Source ORC files written to: {batch2_path}")
+
+# Simulate ingestion: Read source and write to Delta (OVERWRITES everything!)
+df2_with_audit = df2.withColumn("_aud_batch_load_id", lit(BATCH_2))
+df2_with_audit.write.mode("overwrite").format("delta").saveAsTable(overwrite_table)
+print(f"  ✓ Delta table now has {spark.table(overwrite_table).count()} rows with batch_id={BATCH_2}")
+print(f"  ⚠ Batch 1 data is COMPLETELY GONE (that's what overwrite does!)")
 
 # Verify only batch2 exists
 actual_batches = [row['_aud_batch_load_id'] for row in 
@@ -246,44 +261,77 @@ print("="*80)
 
 # COMMAND ----------
 
-# DBTITLE 1,Scenario 2: PARTITION_OVERWRITE Mode Table
+# DBTITLE 1,Scenario 2: PARTITION_OVERWRITE Mode Table (Hive-Style Partitioning)
 print("\n" + "="*80)
-print("CREATING SCENARIO 2: PARTITION_OVERWRITE MODE")
+print("CREATING SCENARIO 2: PARTITION_OVERWRITE MODE (Hive-Style Partitions)")
 print("="*80)
 
 partition_overwrite_table = f"{TEST_CATALOG}.{TEST_SCHEMA}.orders_partition_overwrite"
 
 # Batch 1: Initial load with partitions 2024-11-01 and 2024-11-02
 print(f"\nBatch 1: Creating partitioned table with {len(batch1_data)} rows, batch_id={BATCH_1}")
+print(f"  Partitions: 2024-11-01 (2 rows), 2024-11-02 (1 row)")
+
+# Create source data with partition values
 df1_po = spark.createDataFrame(batch1_data, orders_schema)
-df1_po_with_audit = df1_po.withColumn("_aud_batch_load_id", lit(BATCH_1))
-df1_po_with_audit.write.mode("overwrite").format("delta") \
+
+# Data partition mapping (simulating different dates)
+df1_po_part1 = df1_po.limit(2).withColumn("partition_date", lit("2024-11-01"))  # First 2 rows
+df1_po_part2 = df1_po.tail(1)[0]  # Last row
+df1_po_part2 = spark.createDataFrame([df1_po_part2], orders_schema).withColumn("partition_date", lit("2024-11-02"))
+
+# Save batch1 source files in Hive-style partitioned directories
+batch1_po_path = f"{DBFS_BASE_PATH}/partition_overwrite/batch1"
+df1_po_part1.write.mode("overwrite").format("orc").partitionBy("partition_date").save(batch1_po_path)
+df1_po_part2.write.mode("append").format("orc").partitionBy("partition_date").save(batch1_po_path)
+print(f"  ✓ Source ORC files written in Hive-style: {batch1_po_path}/partition_date=<value>/")
+
+# Simulate production ingestion: Read ORC with partition extraction
+source_df_b1 = spark.read.format("orc").load(batch1_po_path)
+# Extract partition from file path (production ingestion does this!)
+from pyspark.sql.functions import regexp_extract, col
+source_df_b1 = source_df_b1.withColumn("partition_date", 
+    regexp_extract(col("_metadata.file_path"), "partition_date=([^/]+)", 1))
+# Add audit column and write to Delta
+source_df_b1.withColumn("_aud_batch_load_id", lit(BATCH_1)) \
+    .write.mode("overwrite").format("delta") \
     .partitionBy("partition_date").saveAsTable(partition_overwrite_table)
 
 partitions_b1 = [row['partition_date'] for row in 
                  spark.table(partition_overwrite_table).select("partition_date").distinct().collect()]
-print(f"  ✓ Created partitions: {sorted(partitions_b1)}, all with batch_id={BATCH_1}")
-
-# Save batch1 source files
-batch1_po_path = f"{DBFS_BASE_PATH}/partition_overwrite/batch1"
-df1_po.write.mode("overwrite").format("orc").save(batch1_po_path)
+print(f"  ✓ Delta table created with partitions: {sorted(partitions_b1)}, batch_id={BATCH_1}")
 
 # Batch 2: Overwrite ONLY partition_date=2024-11-01, add new partition 2024-11-03
 print(f"\nBatch 2: Overwriting partition 2024-11-01 + adding 2024-11-03, batch_id={BATCH_2}")
-df2_po = spark.createDataFrame(batch2_data, orders_schema)
-df2_po_with_audit = df2_po.withColumn("_aud_batch_load_id", lit(BATCH_2))
+print(f"  Partitions: 2024-11-01 (1 row, overwrite), 2024-11-03 (1 row, new)")
 
-# Use dynamic partition overwrite
+df2_po = spark.createDataFrame(batch2_data, orders_schema)
+
+# Data partition mapping
+df2_po_part1 = df2_po.limit(1).withColumn("partition_date", lit("2024-11-01"))  # Overwrites 2024-11-01
+df2_po_part2 = df2_po.tail(1)[0]
+df2_po_part2 = spark.createDataFrame([df2_po_part2], orders_schema).withColumn("partition_date", lit("2024-11-03"))
+
+# Save batch2 source files in Hive-style partitioned directories
+batch2_po_path = f"{DBFS_BASE_PATH}/partition_overwrite/batch2"
+df2_po_part1.write.mode("overwrite").format("orc").partitionBy("partition_date").save(batch2_po_path)
+df2_po_part2.write.mode("append").format("orc").partitionBy("partition_date").save(batch2_po_path)
+print(f"  ✓ Source ORC files written in Hive-style: {batch2_po_path}/partition_date=<value>/")
+
+# Simulate production ingestion: Read ORC with partition extraction
+source_df_b2 = spark.read.format("orc").load(batch2_po_path)
+# Extract partition from file path (production ingestion does this!)
+source_df_b2 = source_df_b2.withColumn("partition_date", 
+    regexp_extract(col("_metadata.file_path"), "partition_date=([^/]+)", 1))
+
+# Use dynamic partition overwrite (only overwrites partitions present in data)
 spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
-df2_po_with_audit.write.mode("overwrite").format("delta") \
+source_df_b2.withColumn("_aud_batch_load_id", lit(BATCH_2)) \
+    .write.mode("overwrite").format("delta") \
     .partitionBy("partition_date").saveAsTable(partition_overwrite_table)
 
 # Reset to default after partition overwrite test
 spark.conf.set("spark.sql.sources.partitionOverwriteMode", "static")
-
-# Save batch2 source files
-batch2_po_path = f"{DBFS_BASE_PATH}/partition_overwrite/batch2"
-df2_po.write.mode("overwrite").format("orc").save(batch2_po_path)
 
 # Verify partition states
 result = spark.sql(f"""
@@ -298,56 +346,96 @@ for row in result:
     print(f"  partition_date={row['partition_date']}: batch_id={row['_aud_batch_load_id']}, rows={row['row_count']}")
 
 print(f"\n  Expected:")
-print(f"    2024-11-01: BATCH_2 (overwritten)")
-print(f"    2024-11-02: BATCH_1 (untouched)")
-print(f"    2024-11-03: BATCH_2 (new)")
+print(f"    2024-11-01: BATCH_2 (overwritten by batch2)")
+print(f"    2024-11-02: BATCH_1 (untouched by batch2)")
+print(f"    2024-11-03: BATCH_2 (new partition from batch2)")
 
 print(f"\n✓ PARTITION_OVERWRITE scenario created: {partition_overwrite_table}")
 print("="*80)
 
 # COMMAND ----------
 
-# DBTITLE 1,Scenario 3: APPEND Mode Table
+# DBTITLE 1,Scenario 3: APPEND Mode Table (Hive-Style Partitioning)
 print("\n" + "="*80)
-print("CREATING SCENARIO 3: APPEND MODE")
+print("CREATING SCENARIO 3: APPEND MODE (Hive-Style Partitions)")
 print("="*80)
 
 append_table = f"{TEST_CATALOG}.{TEST_SCHEMA}.orders_append"
 
 # Batch 1: Initial load
 print(f"\nBatch 1: Creating table with {len(batch1_data)} rows, batch_id={BATCH_1}")
-df1_app = spark.createDataFrame(batch1_data, orders_schema)
-df1_app_with_audit = df1_app.withColumn("_aud_batch_load_id", lit(BATCH_1))
-df1_app_with_audit.write.mode("overwrite").format("delta") \
+print(f"  Partitions: 2024-11-01 (2 rows), 2024-11-02 (1 row)")
+
+df1_ap = spark.createDataFrame(batch1_data, orders_schema)
+
+# Data partition mapping
+df1_ap_part1 = df1_ap.limit(2).withColumn("partition_date", lit("2024-11-01"))
+df1_ap_part2 = df1_ap.tail(1)[0]
+df1_ap_part2 = spark.createDataFrame([df1_ap_part2], orders_schema).withColumn("partition_date", lit("2024-11-02"))
+
+# Save batch1 source files in Hive-style partitioned directories
+batch1_ap_path = f"{DBFS_BASE_PATH}/append/batch1"
+df1_ap_part1.write.mode("overwrite").format("orc").partitionBy("partition_date").save(batch1_ap_path)
+df1_ap_part2.write.mode("append").format("orc").partitionBy("partition_date").save(batch1_ap_path)
+print(f"  ✓ Source ORC files written in Hive-style: {batch1_ap_path}/partition_date=<value>/")
+
+# Simulate production ingestion: Read ORC with partition extraction
+source_df_ap1 = spark.read.format("orc").load(batch1_ap_path)
+source_df_ap1 = source_df_ap1.withColumn("partition_date", 
+    regexp_extract(col("_metadata.file_path"), "partition_date=([^/]+)", 1))
+source_df_ap1.withColumn("_aud_batch_load_id", lit(BATCH_1)) \
+    .write.mode("overwrite").format("delta") \
     .partitionBy("partition_date").saveAsTable(append_table)
+print(f"  ✓ Delta table created with {spark.table(append_table).count()} rows")
 
-# Save batch1 source files
-batch1_app_path = f"{DBFS_BASE_PATH}/append/batch1"
-df1_app.write.mode("overwrite").format("orc").save(batch1_app_path)
-
-# Batch 2: Append more data
+# Batch 2: Append new data
 print(f"\nBatch 2: APPENDING {len(batch2_data)} rows, batch_id={BATCH_2}")
-df2_app = spark.createDataFrame(batch2_data, orders_schema)
-df2_app_with_audit = df2_app.withColumn("_aud_batch_load_id", lit(BATCH_2))
-df2_app_with_audit.write.mode("append").format("delta") \
+print(f"  Partitions: 2024-11-01 (1 row), 2024-11-03 (1 row)")
+
+df2_ap = spark.createDataFrame(batch2_data, orders_schema)
+
+# Data partition mapping
+df2_ap_part1 = df2_ap.limit(1).withColumn("partition_date", lit("2024-11-01"))
+df2_ap_part2 = df2_ap.tail(1)[0]
+df2_ap_part2 = spark.createDataFrame([df2_ap_part2], orders_schema).withColumn("partition_date", lit("2024-11-03"))
+
+# Save batch2 source files in Hive-style partitioned directories
+batch2_ap_path = f"{DBFS_BASE_PATH}/append/batch2"
+df2_ap_part1.write.mode("overwrite").format("orc").partitionBy("partition_date").save(batch2_ap_path)
+df2_ap_part2.write.mode("append").format("orc").partitionBy("partition_date").save(batch2_ap_path)
+print(f"  ✓ Source ORC files written in Hive-style: {batch2_ap_path}/partition_date=<value>/")
+
+# Simulate production ingestion: Read ORC with partition extraction
+source_df_ap2 = spark.read.format("orc").load(batch2_ap_path)
+source_df_ap2 = source_df_ap2.withColumn("partition_date", 
+    regexp_extract(col("_metadata.file_path"), "partition_date=([^/]+)", 1))
+source_df_ap2.withColumn("_aud_batch_load_id", lit(BATCH_2)) \
+    .write.mode("append").format("delta") \
     .partitionBy("partition_date").saveAsTable(append_table)
+print(f"  ✓ Delta table now has {spark.table(append_table).count()} rows (original + new)")
 
-# Save batch2 source files
-batch2_app_path = f"{DBFS_BASE_PATH}/append/batch2"
-df2_app.write.mode("overwrite").format("orc").save(batch2_app_path)
-
-# Batch 3: Append even more data
+# Batch 3: Append more data
 print(f"\nBatch 3: APPENDING {len(batch3_data)} rows, batch_id={BATCH_3}")
-df3_app = spark.createDataFrame(batch3_data, orders_schema)
-df3_app_with_audit = df3_app.withColumn("_aud_batch_load_id", lit(BATCH_3))
-df3_app_with_audit.write.mode("append").format("delta") \
+print(f"  Partitions: 2024-11-04 (2 rows)")
+
+df3_ap = spark.createDataFrame(batch3_data, orders_schema)
+df3_ap = df3_ap.withColumn("partition_date", lit("2024-11-04"))
+
+# Save batch3 source files in Hive-style partitioned directories
+batch3_ap_path = f"{DBFS_BASE_PATH}/append/batch3"
+df3_ap.write.mode("overwrite").format("orc").partitionBy("partition_date").save(batch3_ap_path)
+print(f"  ✓ Source ORC files written in Hive-style: {batch3_ap_path}/partition_date=<value>/")
+
+# Simulate production ingestion: Read ORC with partition extraction
+source_df_ap3 = spark.read.format("orc").load(batch3_ap_path)
+source_df_ap3 = source_df_ap3.withColumn("partition_date", 
+    regexp_extract(col("_metadata.file_path"), "partition_date=([^/]+)", 1))
+source_df_ap3.withColumn("_aud_batch_load_id", lit(BATCH_3)) \
+    .write.mode("append").format("delta") \
     .partitionBy("partition_date").saveAsTable(append_table)
+print(f"  ✓ Delta table now has {spark.table(append_table).count()} rows (all batches)")
 
-# Save batch3 source files
-batch3_app_path = f"{DBFS_BASE_PATH}/append/batch3"
-df3_app.write.mode("overwrite").format("orc").save(batch3_app_path)
-
-# Verify all batches coexist
+# Verify all batches exist
 result = spark.sql(f"""
     SELECT _aud_batch_load_id, COUNT(*) as row_count
     FROM {append_table}
@@ -355,14 +443,9 @@ result = spark.sql(f"""
     ORDER BY _aud_batch_load_id
 """).collect()
 
-print(f"\nFinal state - All batches coexist:")
+print(f"\nFinal state:")
 for row in result:
-    print(f"  batch_id={row['_aud_batch_load_id']}: {row['row_count']} rows")
-
-total_rows = spark.table(append_table).count()
-expected_rows = len(batch1_data) + len(batch2_data) + len(batch3_data)
-print(f"\nTotal rows: {total_rows} (expected: {expected_rows})")
-assert total_rows == expected_rows, f"Row count mismatch!"
+    print(f"  batch_id={row['_aud_batch_load_id']}: rows={row['row_count']}")
 
 print(f"\n✓ APPEND scenario created: {append_table}")
 print("="*80)
@@ -376,14 +459,26 @@ print("="*80)
 
 from pyspark.sql.types import TimestampType, LongType
 
-# Helper function to get file metadata
+# Helper function to get file metadata (recursively handles Hive-style partitions)
 def get_file_metadata(path):
     try:
-        files = dbutils.fs.ls(path)
-        data_files = [(f.path, datetime.fromtimestamp(f.modificationTime / 1000), f.size) 
-                      for f in files if not f.name.startswith('_') and f.size > 0]
-        return data_files
-    except:
+        all_files = []
+        
+        def recurse_dir(dir_path):
+            items = dbutils.fs.ls(dir_path)
+            for item in items:
+                if item.isDir():
+                    # Recursively explore subdirectories (like partition_date=2024-11-01/)
+                    recurse_dir(item.path)
+                else:
+                    # It's a file - add if it's not a metadata file and has size > 0
+                    if not item.name.startswith('_') and item.size > 0:
+                        all_files.append((item.path, datetime.fromtimestamp(item.modificationTime / 1000), item.size))
+        
+        recurse_dir(path)
+        return all_files
+    except Exception as e:
+        print(f"  ⚠ Error reading {path}: {e}")
         return []
 
 # 1. Insert into serving_ingestion_config

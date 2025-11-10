@@ -6,7 +6,7 @@
       "queryLines": [
         "WITH validation_summary_table AS (\n",
         "    SELECT \n",
-        "        *,\n",
+        "        * EXCEPT (overall_status),\n",
         "        TO_DATE(\n",
         "            REGEXP_EXTRACT(\n",
         "                iteration_name, \n",
@@ -14,7 +14,16 @@
         "                1\n",
         "            ), \n",
         "            'yyyyMMdd'\n",
-        "        ) AS validation_date\n",
+        "        ) AS validation_date,\n",
+        "        CASE \n",
+        "            WHEN row_count_match_status != 'FAILED'\n",
+        "             AND schema_match_status != 'FAILED'\n",
+        "             AND col_name_compare_status != 'FAILED'\n",
+        "             AND data_type_compare_status != 'FAILED'\n",
+        "             AND data_reconciliation_status != 'FAILED'\n",
+        "            THEN 'PASSED'\n",
+        "            ELSE 'FAILED'\n",
+        "        END AS overall_status\n",
         "    FROM <<validation_catalog_name>>.<<validation_schema_name>>.validation_summary\n",
         ")\n",
         "SELECT \n",
@@ -27,7 +36,7 @@
         "    validation_date, \n",
         "    overall_status\n",
         "ORDER BY \n",
-        "    validation_date DESC;\n"
+        "    validation_date DESC;"
       ],
       "catalog": "cat_ril_nayeem_03",
       "schema": "dmvdb_system"
@@ -46,15 +55,24 @@
         "                1\n",
         "            ),\n",
         "            'yyyyMMdd'\n",
-        "        ) AS validation_date\n",
+        "        ) AS validation_date,\n",
+        "        CASE \n",
+        "            WHEN row_count_match_status != 'FAILED'\n",
+        "             AND schema_match_status != 'FAILED'\n",
+        "             AND col_name_compare_status != 'FAILED'\n",
+        "             AND data_type_compare_status != 'FAILED'\n",
+        "             AND data_reconciliation_status != 'FAILED'\n",
+        "            THEN 'PASSED'\n",
+        "            ELSE 'FAILED'\n",
+        "        END AS status\n",
         "    FROM <<validation_catalog_name>>.<<validation_schema_name>>.validation_summary\n",
         ")\n",
         "SELECT \n",
         "    validation_date AS run_date,\n",
-        "    SUM(CASE WHEN overall_status = 'PASSED' THEN 1 ELSE 0 END) AS successful_validations,\n",
-        "    SUM(CASE WHEN overall_status <> 'PASSED' THEN 1 ELSE 0 END) AS failed_validations,\n",
+        "    SUM(CASE WHEN status = 'PASSED' THEN 1 ELSE 0 END) AS successful_validations,\n",
+        "    SUM(CASE WHEN status <> 'PASSED' THEN 1 ELSE 0 END) AS failed_validations,\n",
         "    COUNT(*) AS total_validations,\n",
-        "    ROUND(100.0 * SUM(CASE WHEN overall_status = 'PASSED' THEN 1 ELSE 0 END) / COUNT(*), 2) AS success_rate_percent\n",
+        "    ROUND(100.0 * SUM(CASE WHEN status = 'PASSED' THEN 1 ELSE 0 END) / COUNT(*), 2) AS success_rate_percent\n",
         "FROM validation_summary_table\n",
         "GROUP BY validation_date\n",
         "ORDER BY run_date DESC;\n"
@@ -75,13 +93,20 @@
         "    ),\n",
         "    'yyyyMMdd'\n",
         ") AS validation_date,\n",
-        "\n",
-        "    overall_status,\n",
+        "CASE \n",
+        "    WHEN row_count_match_status != 'FAILED'\n",
+        "     AND schema_match_status != 'FAILED'\n",
+        "     AND col_name_compare_status != 'FAILED'\n",
+        "     AND data_type_compare_status != 'FAILED'\n",
+        "     AND data_reconciliation_status != 'FAILED'\n",
+        "    THEN 'PASSED'\n",
+        "    ELSE 'FAILED'\n",
+        "  END AS overall_status,\n",
         "    row_count_match_status,\n",
         "    schema_match_status,\n",
         "    col_name_compare_status,\n",
         "    data_type_compare_status,\n",
-        "    primary_key_compliance_status,\n",
+        "    -- primary_key_compliance_status,\n",
         "    data_reconciliation_status,\n",
         "    metrics.src_records as source_count,\n",
         "    metrics.tgt_records as target_count,\n",
@@ -94,7 +119,7 @@
         "    table_family,\n",
         "    src_table as source_table\n",
         "\n",
-      "FROM <<validation_catalog_name>>.<<validation_schema_name>>.validation_summary\n"
+        "FROM <<validation_catalog_name>>.<<validation_schema_name>>.validation_summary order by validation_date desc;\n"
       ]
     },
     {
@@ -111,7 +136,15 @@
         "            ), \n",
         "            'yyyyMMdd'\n",
         "        ) AS validation_date,\n",
-        "        UPPER(overall_status) AS status\n",
+        "          CASE \n",
+        "    WHEN row_count_match_status != 'FAILED'\n",
+        "     AND schema_match_status != 'FAILED'\n",
+        "     AND col_name_compare_status != 'FAILED'\n",
+        "     AND data_type_compare_status != 'FAILED'\n",
+        "     AND data_reconciliation_status != 'FAILED'\n",
+        "    THEN 'PASSED'\n",
+        "    ELSE 'FAILED'\n",
+        "  END AS status\n",
         "    FROM <<validation_catalog_name>>.<<validation_schema_name>>.validation_summary\n",
         "),\n",
         "date_scaffold AS (\n",
@@ -125,7 +158,8 @@
         "FROM date_scaffold ds\n",
         "LEFT JOIN validation_summary_table vst \n",
         "    ON ds.validation_date = vst.validation_date\n",
-        "GROUP BY ds.validation_date;\n"
+        "GROUP BY ds.validation_date;\n",
+        " "
       ]
     }
   ],
@@ -633,10 +667,6 @@
                       "expression": "`data_type_compare_status`"
                     },
                     {
-                      "name": "primary_key_compliance_status",
-                      "expression": "`primary_key_compliance_status`"
-                    },
-                    {
                       "name": "data_reconciliation_status",
                       "expression": "`data_reconciliation_status`"
                     },
@@ -892,32 +922,6 @@
                     "visible": true,
                     "order": 7,
                     "title": "data_type_compare_status",
-                    "allowSearch": false,
-                    "alignContent": "left",
-                    "allowHTML": false,
-                    "highlightLinks": false,
-                    "useMonospaceFont": false,
-                    "preserveWhitespace": false
-                  },
-                  {
-                    "fieldName": "primary_key_compliance_status",
-                    "booleanValues": [
-                      "false",
-                      "true"
-                    ],
-                    "imageUrlTemplate": "{{ @ }}",
-                    "imageTitleTemplate": "{{ @ }}",
-                    "imageWidth": "",
-                    "imageHeight": "",
-                    "linkUrlTemplate": "{{ @ }}",
-                    "linkTextTemplate": "{{ @ }}",
-                    "linkTitleTemplate": "{{ @ }}",
-                    "linkOpenInNewTab": true,
-                    "type": "string",
-                    "displayAs": "string",
-                    "visible": true,
-                    "order": 8,
-                    "title": "primary_key_compliance_status",
                     "allowSearch": false,
                     "alignContent": "left",
                     "allowHTML": false,
@@ -1265,7 +1269,7 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Successful"
+                "title": "Total Batch Validations Successful"
               }
             }
           },
@@ -1304,7 +1308,7 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Failed"
+                "title": "Total Batch Validations Failed"
               }
             }
           },
@@ -1343,7 +1347,7 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Total Runs Today"
+                "title": "Total Batches Validated Today"
               }
             }
           },
@@ -1364,6 +1368,7 @@
     },
     "genieSpace": {
       "isEnabled": false
-    }
+    },
+    "applyModeEnabled": false
   }
 }

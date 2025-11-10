@@ -229,6 +229,9 @@ spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
 df2_po_with_audit.write.mode("overwrite").format("delta") \
     .partitionBy("partition_date").saveAsTable(partition_overwrite_table)
 
+# Reset to default after partition overwrite test
+spark.conf.set("spark.sql.sources.partitionOverwriteMode", "static")
+
 # Save batch2 source files
 batch2_po_path = f"{DBFS_BASE_PATH}/partition_overwrite/batch2"
 df2_po.write.mode("overwrite").format("orc").save(batch2_po_path)

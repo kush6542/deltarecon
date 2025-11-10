@@ -143,8 +143,19 @@ class SourceTargetLoader:
             
             # Extract partitions if configured
             if config.is_partitioned:
-                self.logger.info(f"  Extracting partition columns: {config.partition_columns}")
-                df_with_partitions = self._extract_partitions(df_original, config)
+                # Check if partition columns already exist in source data
+                existing_partition_cols = [col for col in config.partition_columns if col in original_cols]
+                missing_partition_cols = [col for col in config.partition_columns if col not in original_cols]
+                
+                if existing_partition_cols:
+                    self.logger.info(f"  Partition columns already in source data: {existing_partition_cols}")
+                
+                if missing_partition_cols:
+                    self.logger.info(f"  Extracting partition columns from file paths: {missing_partition_cols}")
+                    df_with_partitions = self._extract_partitions(df_original, config, missing_partition_cols)
+                else:
+                    # All partition columns already exist
+                    df_with_partitions = df_original
                 
                 # CRITICAL: Verify partition extraction didn't lose/add rows
                 final_count = df_with_partitions.count()
@@ -158,31 +169,32 @@ class SourceTargetLoader:
                     self.logger.error(error_msg)
                     raise DataConsistencyError(error_msg)
                 
-                # Verify partition columns were added
-                final_cols = set(df_with_partitions.columns)
-                added_cols = final_cols - original_cols
+                # Verify partition columns were added (only for missing ones)
+                if missing_partition_cols:
+                    final_cols = set(df_with_partitions.columns)
+                    added_cols = final_cols - original_cols
+                    
+                    if set(missing_partition_cols) != added_cols:
+                        error_msg = (
+                            f"Partition extraction mismatch! "
+                            f"Expected to add: {missing_partition_cols}, "
+                            f"Actually added: {added_cols}"
+                        )
+                        self.logger.error(error_msg)
+                        raise DataConsistencyError(error_msg)
                 
-                if set(config.partition_columns) != added_cols:
-                    error_msg = (
-                        f"Partition extraction mismatch! "
-                        f"Expected to add: {config.partition_columns}, "
-                        f"Actually added: {added_cols}"
-                    )
-                    self.logger.error(error_msg)
-                    raise DataConsistencyError(error_msg)
-                
-                # Verify partition columns have no nulls
+                # Verify ALL partition columns have no nulls
                 for part_col in config.partition_columns:
                     null_count = df_with_partitions.filter(col(part_col).isNull()).count()
                     if null_count > 0:
                         error_msg = (
                             f"Partition column '{part_col}' has {null_count:,} NULL values! "
-                            f"Extraction from file path failed."
+                            f"{'Extraction from file path failed' if part_col in missing_partition_cols else 'Source data contains NULL partition values'}."
                         )
                         self.logger.error(error_msg)
                         raise DataConsistencyError(error_msg)
                 
-                self.logger.info(f"  Partition extraction verified: added {config.partition_columns}")
+                self.logger.info(f"  Partition columns verified: {config.partition_columns}")
                 return df_with_partitions
             else:
                 self.logger.info("  No partitions to extract")
@@ -260,20 +272,24 @@ class SourceTargetLoader:
         # Reuse CSV loader
         return self._load_csv(file_paths, options)
     
-    def _extract_partitions(self, df: DataFrame, config: TableConfig) -> DataFrame:
+    def _extract_partitions(self, df: DataFrame, config: TableConfig, columns_to_extract: List[str] = None) -> DataFrame:
         """
         Extract partition columns from file paths
         
         Args:
             df: Original DataFrame
             config: Table configuration with partition info
+            columns_to_extract: List of partition columns to extract (if None, extracts all)
         
         Returns:
             DataFrame with partition columns added
         """
         result_df = df
         
-        for part_col in config.partition_columns:
+        # Use specified columns or default to all partition columns
+        cols_to_extract = columns_to_extract if columns_to_extract is not None else config.partition_columns
+        
+        for part_col in cols_to_extract:
             # Extract from _metadata.file_path
             # Pattern: partition_col=value
             pattern = f"{part_col}=([^/]+)"

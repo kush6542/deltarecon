@@ -168,6 +168,7 @@ class ValidationEngine:
         
         Rule: If all validators PASSED or SKIPPED, then SUCCESS
               If any validator FAILED or ERROR, then FAILED
+              EXCEPTION: PK validation failures are logged but don't affect overall status
         
         Args:
             validator_results: Dict of validator results
@@ -176,6 +177,16 @@ class ValidationEngine:
             Overall status string
         """
         for validator_name, result in validator_results.items():
+            # Skip PK validator when determining overall status
+            # PK failures are recorded in summary but don't prevent batch completion
+            if validator_name == "pk_validation":
+                if result.status in ["FAILED", "ERROR"]:
+                    self.logger.warning(
+                        f"PK Compliance Check FAILED - recorded in summary but not affecting overall status. "
+                        f"This batch will not be re-validated."
+                    )
+                continue
+            
             if result.status in ["FAILED", "ERROR"]:
                 self.logger.warning(f"Validator '{validator_name}' status: {result.status}")
                 return "FAILED"

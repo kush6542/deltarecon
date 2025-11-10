@@ -2,14 +2,18 @@
 # MAGIC %md
 # MAGIC # Manual Batch Validation Debugger
 # MAGIC 
-# MAGIC **Purpose:** Debug validation failures for a specific table and batch
+# MAGIC **Purpose:** Debug validation failures for a specific table and batch in production or test environments
+# MAGIC 
+# MAGIC **Features:**
+# MAGIC - Supports ORC, CSV, and Text file formats
+# MAGIC - Uses framework's file selection logic
+# MAGIC - Works with production and test environments
+# MAGIC - Prints all files being read for transparency
 # MAGIC 
 # MAGIC **How to use:**
 # MAGIC 1. Fill in the widgets at the top
 # MAGIC 2. Run all cells
 # MAGIC 3. Review each validation check output
-# MAGIC 
-# MAGIC **Note:** This notebook uses simple Spark code - no framework imports required
 
 # COMMAND ----------
 
@@ -20,8 +24,14 @@
 
 from pyspark.sql import functions as F
 from pyspark.sql.functions import col, md5, concat_ws, count, lit, regexp_extract, when
+import json
 
-print("Setup complete")
+# Import framework modules for file selection and loading
+from deltarecon.core.batch_processor import BatchProcessor
+from deltarecon.core.source_target_loader import SourceTargetLoader
+from deltarecon.models.table_config import TableConfig
+
+print("Setup complete - Framework modules imported")
 
 # COMMAND ----------
 
@@ -79,6 +89,7 @@ ingestion_query = f"""
         target_table,
         source_file_path,
         source_file_format,
+        source_file_options,
         write_mode,
         partition_column
     FROM {INGESTION_CONFIG_TABLE}
@@ -117,6 +128,15 @@ else:
 # Parse partition columns (comma-separated)
 partition_columns = [pc.strip() for pc in ingestion_config.partition_column.split(',')] if ingestion_config.partition_column else []
 
+# Parse source file options (JSON string to dict)
+source_file_options = {}
+if ingestion_config.source_file_options:
+    try:
+        source_file_options = json.loads(ingestion_config.source_file_options)
+    except json.JSONDecodeError as e:
+        print(f"WARNING: Failed to parse source_file_options: {e}. Will use empty options.")
+        source_file_options = {}
+
 print("\nConfiguration loaded successfully")
 print("\n" + "="*70)
 print("TABLE CONFIGURATION")
@@ -125,6 +145,7 @@ print(f"Target Table: {TARGET_TABLE}")
 print(f"Source File Path: {ingestion_config.source_file_path}")
 print(f"Write Mode: {ingestion_config.write_mode}")
 print(f"File Format: {ingestion_config.source_file_format}")
+print(f"File Options: {source_file_options}")
 print(f"Primary Keys: {primary_keys}")
 print(f"Partition Columns: {partition_columns}")
 print(f"Exclude Fields: {exclude_fields}")
@@ -133,89 +154,130 @@ print("="*70)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Find Source ORC Files for Batch
+# MAGIC ## Find Source Files for Batch (Using Framework Logic)
 
 # COMMAND ----------
 
-print("Locating source ORC files for batch...")
+print("Locating source files for batch using framework's file selection logic...")
+print(f"File format: {ingestion_config.source_file_format}")
 
-# Construct path based on write mode
-source_base_path = ingestion_config.source_file_path
+# Query the ingestion_metadata table to find files for this batch
+# This matches how the framework (batch_processor) identifies files
+from deltarecon.config import constants
 
-if ingestion_config.write_mode == "partition_overwrite" and partition_columns:
-    # For partitioned writes, look in partition directories
-    # Format: /base/path/partition_col=value/
-    # We need to find directories matching our batch_load_id
-    
-    # List partition directories
-    try:
-        partition_dirs = dbutils.fs.ls(source_base_path)
-        
-        # Filter for directories containing our batch_load_id
-        matching_dirs = []
-        for dir_info in partition_dirs:
-            if BATCH_LOAD_ID in dir_info.path:
-                matching_dirs.append(dir_info.path)
-        
-        if not matching_dirs:
-            print(f"WARNING: No partition directories found matching batch_load_id: {BATCH_LOAD_ID}")
-            print(f"Trying alternative path patterns...")
-            
-            # Try looking in subdirectories
-            for dir_info in partition_dirs:
-                if dir_info.isDir():
-                    try:
-                        subdirs = dbutils.fs.ls(dir_info.path)
-                        for subdir in subdirs:
-                            if BATCH_LOAD_ID in subdir.path:
-                                matching_dirs.append(subdir.path)
-                    except:
-                        pass
-        
-        if matching_dirs:
-            source_paths = matching_dirs
-            print(f"Found {len(source_paths)} partition path(s) for batch {BATCH_LOAD_ID}")
-            for path in source_paths[:5]:
-                print(f"  - {path}")
-            if len(source_paths) > 5:
-                print(f"  ... and {len(source_paths) - 5} more")
-        else:
-            raise ValueError(f"No source files found for batch {BATCH_LOAD_ID}")
-            
-    except Exception as e:
-        print(f"Error listing directories: {e}")
-        # Fallback: try direct path
-        source_paths = [f"{source_base_path}/*{BATCH_LOAD_ID}*"]
-        print(f"Using pattern: {source_paths[0]}")
-else:
-    # For append/overwrite, files might be in the base directory
-    source_paths = [f"{source_base_path}/*{BATCH_LOAD_ID}*"]
-    print(f"Using pattern: {source_paths[0]}")
+file_query = f"""
+    SELECT 
+        source_file_path,
+        batch_load_id
+    FROM {constants.INGESTION_METADATA_TABLE}
+    WHERE table_name = '{TARGET_TABLE}'
+        AND batch_load_id = '{BATCH_LOAD_ID}'
+"""
+
+file_result = spark.sql(file_query)
+file_rows = file_result.collect()
+
+if not file_rows:
+    raise ValueError(f"No source files found for batch {BATCH_LOAD_ID} in ingestion_metadata table")
+
+# Extract source file paths
+source_file_paths = [row.source_file_path for row in file_rows]
+
+print(f"\nFound {len(source_file_paths)} source file(s) for batch {BATCH_LOAD_ID}:")
+print("="*70)
+for i, path in enumerate(source_file_paths, 1):
+    print(f"  {i}. {path}")
+print("="*70)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Load Source Data (ORC Files)
+# MAGIC ## Load Source Data (ORC/CSV/Text Files)
 
 # COMMAND ----------
 
-print("Loading source ORC files...")
+print(f"Loading source data files (format: {ingestion_config.source_file_format})...")
 
 try:
-    # Read ORC files
-    source_df = None
-    for path in source_paths:
-        df_temp = spark.read.format("orc").load(path)
-        if source_df is None:
-            source_df = df_temp
-        else:
-            source_df = source_df.union(df_temp)
+    file_format = ingestion_config.source_file_format.lower()
+    
+    # Load based on format
+    if file_format == "orc":
+        print("  Loading ORC files...")
+        source_df = spark.read.format("orc").load(source_file_paths)
+        
+    elif file_format == "csv":
+        print("  Loading CSV files...")
+        reader = spark.read.format("csv")
+        
+        # Apply CSV options
+        if "header" in source_file_options:
+            reader = reader.option("header", source_file_options["header"])
+        if "sep" in source_file_options:
+            reader = reader.option("sep", source_file_options["sep"])
+        if "quote" in source_file_options:
+            reader = reader.option("quote", source_file_options["quote"])
+        if "escape" in source_file_options:
+            reader = reader.option("escape", source_file_options["escape"])
+        if "multiline" in source_file_options:
+            reader = reader.option("multiline", source_file_options["multiline"])
+        
+        # Apply schema if provided
+        if "schema" in source_file_options:
+            from pyspark.sql.types import StructType
+            try:
+                schema = StructType.fromDDL(source_file_options["schema"])
+                reader = reader.schema(schema)
+                print(f"    Applied explicit schema from options")
+            except Exception as e:
+                print(f"    WARNING: Failed to parse schema: {e}. Will infer schema.")
+        
+        source_df = reader.load(source_file_paths)
+        
+    elif file_format == "text":
+        print("  Loading Text files...")
+        # Text files are just CSV with different separators
+        reader = spark.read.format("csv")
+        
+        # Apply text/CSV options
+        if "header" in source_file_options:
+            reader = reader.option("header", source_file_options["header"])
+        if "sep" in source_file_options:
+            reader = reader.option("sep", source_file_options["sep"])
+        if "quote" in source_file_options:
+            reader = reader.option("quote", source_file_options["quote"])
+        if "escape" in source_file_options:
+            reader = reader.option("escape", source_file_options["escape"])
+        if "multiline" in source_file_options:
+            reader = reader.option("multiline", source_file_options["multiline"])
+        
+        # Apply schema if provided
+        if "schema" in source_file_options:
+            from pyspark.sql.types import StructType
+            try:
+                schema = StructType.fromDDL(source_file_options["schema"])
+                reader = reader.schema(schema)
+                print(f"    Applied explicit schema from options")
+            except Exception as e:
+                print(f"    WARNING: Failed to parse schema: {e}. Will infer schema.")
+        
+        source_df = reader.load(source_file_paths)
+        
+    else:
+        raise ValueError(f"Unsupported file format: {file_format}. Supported: orc, csv, text")
+    
+    original_count = source_df.count()
+    
+    print(f"\nOriginal data loaded successfully")
+    print(f"  Rows: {original_count:,}")
+    print(f"  Columns: {len(source_df.columns)}")
     
     # Extract partition columns from file path if they don't exist in data
     if partition_columns:
+        print(f"\n  Extracting partition columns: {partition_columns}")
         for part_col in partition_columns:
             if part_col not in source_df.columns:
-                print(f"  Extracting partition column: {part_col}")
+                print(f"    Extracting partition column: {part_col}")
                 # Extract from _metadata.file_path
                 pattern = f"{part_col}=([^/]+)"
                 source_df = source_df.withColumn(
@@ -227,11 +289,18 @@ try:
                 # Default to date for partition_date, string for others
                 if "date" in part_col.lower():
                     source_df = source_df.withColumn(part_col, col(part_col).cast("date"))
+        
+        # Verify partition extraction
+        final_count = source_df.count()
+        if final_count != original_count:
+            print(f"  WARNING: Partition extraction changed row count! Before: {original_count:,}, After: {final_count:,}")
+        else:
+            print(f"  Partition extraction verified: row count unchanged")
     
     source_df.cache()
     src_count = source_df.count()
     
-    print(f"\nSource data loaded successfully")
+    print(f"\nFinal source data:")
     print(f"  Rows: {src_count:,}")
     print(f"  Columns: {len(source_df.columns)}")
     
@@ -274,12 +343,12 @@ except Exception as e:
 print("="*70)
 print("SOURCE DATA PREVIEW (first 5 rows)")
 print("="*70)
-display(source_df.limit(5))
+# display(source_df.limit(5))
 
 print("\n" + "="*70)
 print("TARGET DATA PREVIEW (first 5 rows)")
 print("="*70)
-display(target_df.limit(5))
+# display(target_df.limit(5))
 
 # COMMAND ----------
 

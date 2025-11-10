@@ -2,12 +2,13 @@
 
 **A robust data validation framework for Databricks**
 
-DeltaRecon validates the accuracy of data migrations by comparing source data (ORC files) against target data (Delta tables). It ensures data consistency, schema compliance, and primary key integrity across your data pipeline with comprehensive batch-level auditing.
+DeltaRecon validates the accuracy of data migrations by comparing source data (ORC, TEXT, CSV files) against target data (Delta tables). It ensures data consistency, schema compliance, and primary key integrity across your data pipeline with comprehensive batch-level auditing.
 
 ---
 
 ## Features
 
+✓ **Multi-Format Source Support** - ORC, TEXT (delimited), and CSV files with custom options  
 ✓ **Batch-Level Auditing** - Each batch validated independently with complete audit trail  
 ✓ **Parallel Execution** - Processes multiple tables concurrently for faster validation  
 ✓ **Multiple Validation Modes** - Quick validation or full data reconciliation  
@@ -15,6 +16,7 @@ DeltaRecon validates the accuracy of data migrations by comparing source data (O
 ✓ **Flexible Validators** - Row count, schema, primary key, and data reconciliation  
 ✓ **Partial Success Model** - Graceful handling when some batches fail  
 ✓ **Write Mode Awareness** - Smart handling of append vs overwrite ingestion patterns  
+✓ **End-to-End Testing** - Comprehensive test suite with sample data for all formats  
 ✓ **Production Ready** - Enterprise-grade code quality and automated job deployment  
 
 ---
@@ -123,6 +125,62 @@ Check that tables were created and populated:
 ```sql
 SELECT * FROM your_catalog.your_schema.validation_mapping LIMIT 10;
 ```
+
+---
+
+## Testing the Framework
+
+DeltaRecon includes a comprehensive end-to-end test suite that creates sample data for all supported formats.
+
+### Quick Test (10 minutes)
+
+```bash
+# Step 1: Run test setup (creates 6 test tables)
+Run: notebooks/setup/00_end_to_end_testing_setup.py
+
+# Step 2: Sync validation mapping
+Run: notebooks/setup/02_setup_validation_mapping.py
+     (Add 'test_e2e_group' to TABLE_GROUPS_TO_SYNC)
+
+# Step 3: Run validation
+python deltarecon/runner.py --table-group test_e2e_group
+
+# Step 4: Verify results
+Run: notebooks/setup/00_verify_validation_results.py
+```
+
+### What Gets Tested
+
+The test creates 6 tables covering all features:
+
+| Format | Tables | Features Tested |
+|--------|--------|-----------------|
+| **ORC** | 2 | Native format, partitioned & non-partitioned |
+| **TEXT** | 2 | Tab-delimited, pipe-delimited, custom schemas |
+| **CSV** | 2 | Headers, custom separators, schema enforcement |
+
+**Validation Coverage:**
+- ✅ Multi-format source reading (ORC, TEXT, CSV)
+- ✅ Schema validation across formats
+- ✅ Row count matching
+- ✅ Primary key compliance
+- ✅ Data reconciliation
+- ✅ Partitioned tables
+- ✅ Source file options parsing (JSON config)
+
+### Expected Results
+
+All validations should show:
+- `validation_run_status` = **SUCCESS**
+- `overall_status` = **SUCCESS**
+- All check statuses = **PASSED**
+- No exceptions
+
+### Quick Reference
+
+See [E2E_TEST_QUICK_REFERENCE.md](docs/E2E_TEST_QUICK_REFERENCE.md) for commands and troubleshooting.
+
+Full guide: [END_TO_END_TESTING_README.md](notebooks/setup/END_TO_END_TESTING_README.md)
 
 ---
 
@@ -524,14 +582,23 @@ This project follows:
 
 Comprehensive documentation is available in the `docs/` directory:
 
+### Core Documentation
 - **DEPLOYMENT_GUIDE.txt**: Complete deployment and operational guide
 - **DESIGN_DOCUMENTATION.txt**: Detailed architecture and design decisions
 - **DEVELOPMENT_PLAN.md**: Development roadmap and planning
+- **FLOW_DIAGRAMS.md**: Visual workflow diagrams
+
+### Testing & Validation
+- **E2E_TEST_QUICK_REFERENCE.md**: Quick reference for end-to-end testing (⭐ Start here!)
+- **END_TO_END_TESTING_README.md**: Comprehensive testing guide
 - **BATCH_TEST_GUIDE.md**: Guide for batch-level testing
 - **TEST_FRAMEWORK_SUMMARY.md**: Testing framework overview
-- **FLOW_DIAGRAMS.md**: Visual workflow diagrams
+- **MULTI_FORMAT_SOURCE_SUPPORT.md**: Multi-format source details
+
+### Implementation Details
 - **DATA_RECONCILIATION_IMPLEMENTATION.md**: Data reconciliation details
 - **BATCH_LEVEL_AUDITING_CHANGES.md**: Batch-level auditing implementation
+- **INGESTION_SCHEMAS.md**: Metadata table schemas reference
 
 ### Quick Reference
 

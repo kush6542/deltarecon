@@ -43,18 +43,19 @@ print("="*80)
 print("TEST CONFIGURATION")
 print("="*80)
 
-# Test configuration
+# Test configuration with timestamp to avoid conflicts
+TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
 TEST_CATALOG = "ts42_demo"
-TEST_SCHEMA = "test_write_mode_fix"
-TEST_GROUP = "test_write_mode"
+TEST_SCHEMA = f"test_write_mode_fix_{TIMESTAMP}"
+TEST_GROUP = f"test_write_mode_{TIMESTAMP}"
 
 # Generate unique batch IDs
-BATCH_1 = f"BATCH_1_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-BATCH_2 = f"BATCH_2_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-BATCH_3 = f"BATCH_3_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+BATCH_1 = f"BATCH_1_{TIMESTAMP}"
+BATCH_2 = f"BATCH_2_{TIMESTAMP}"
+BATCH_3 = f"BATCH_3_{TIMESTAMP}"
 
 # DBFS paths for source files
-DBFS_BASE_PATH = "/FileStore/write_mode_test"
+DBFS_BASE_PATH = f"/FileStore/write_mode_test_{TIMESTAMP}"
 
 # Metadata tables
 INGESTION_CONFIG_TABLE = "ts42_demo.migration_operations.serving_ingestion_config"
@@ -74,46 +75,94 @@ print("\n" + "="*80)
 print("CLEANING UP PREVIOUS TEST DATA")
 print("="*80)
 
-CLEAN_ALL = True
+CLEAN_ALL = True  # Always clean when re-running
 
 if CLEAN_ALL:
-    print("\n1. Dropping test schema (if exists)...")
+    # Clean up ALL old test schemas (not just current timestamp)
+    print("\n1. Finding and dropping old test schemas...")
     try:
-        spark.sql(f"DROP SCHEMA IF EXISTS {TEST_CATALOG}.{TEST_SCHEMA} CASCADE")
-        print(f"   ✓ Dropped schema: {TEST_CATALOG}.{TEST_SCHEMA}")
+        old_schemas = spark.sql(f"""
+            SHOW SCHEMAS IN {TEST_CATALOG} LIKE 'test_write_mode_fix%'
+        """).collect()
+        
+        for row in old_schemas:
+            schema_name = row['namespace']
+            full_schema = f"{TEST_CATALOG}.{schema_name}"
+            try:
+                spark.sql(f"DROP SCHEMA IF EXISTS {full_schema} CASCADE")
+                print(f"   ✓ Dropped schema: {full_schema}")
+            except Exception as e:
+                print(f"   ⚠ Could not drop {full_schema}: {e}")
     except Exception as e:
-        print(f"   ⚠ Could not drop schema: {e}")
+        print(f"   ⚠ Could not list schemas: {e}")
     
-    print("\n2. Removing DBFS files (if exist)...")
+    print("\n2. Removing old DBFS files...")
     try:
-        dbutils.fs.rm(DBFS_BASE_PATH, recurse=True)
-        print(f"   ✓ Removed DBFS path: {DBFS_BASE_PATH}")
+        # List and remove all old test directories
+        base_dir = "/FileStore/"
+        files = dbutils.fs.ls(base_dir)
+        for f in files:
+            if "write_mode_test" in f.name:
+                try:
+                    dbutils.fs.rm(f.path, recurse=True)
+                    print(f"   ✓ Removed: {f.path}")
+                except Exception as e:
+                    print(f"   ⚠ Could not remove {f.path}: {e}")
     except Exception as e:
-        print(f"   ⚠ Path not found or already clean: {e}")
+        print(f"   ⚠ Could not clean DBFS: {e}")
     
-    print("\n3. Cleaning metadata tables...")
+    print("\n3. Cleaning metadata tables (all old test groups)...")
+    
+    # Clean config
     try:
-        spark.sql(f"DELETE FROM {INGESTION_CONFIG_TABLE} WHERE group_name = '{TEST_GROUP}'")
-        print(f"   ✓ Cleaned {INGESTION_CONFIG_TABLE}")
+        deleted = spark.sql(f"""
+            DELETE FROM {INGESTION_CONFIG_TABLE} 
+            WHERE group_name LIKE 'test_write_mode%'
+        """)
+        config_count = spark.sql(f"""
+            SELECT COUNT(*) as count FROM {INGESTION_CONFIG_TABLE}
+            WHERE group_name LIKE 'test_write_mode%'
+        """).collect()[0]['count']
+        print(f"   ✓ Cleaned {INGESTION_CONFIG_TABLE} (remaining: {config_count})")
     except Exception as e:
         print(f"   ⚠ Could not clean config: {e}")
     
+    # Clean metadata
     try:
-        spark.sql(f"DELETE FROM {INGESTION_METADATA_TABLE} WHERE table_name LIKE '{TEST_CATALOG}.{TEST_SCHEMA}.%'")
-        print(f"   ✓ Cleaned {INGESTION_METADATA_TABLE}")
+        deleted = spark.sql(f"""
+            DELETE FROM {INGESTION_METADATA_TABLE} 
+            WHERE table_name LIKE '{TEST_CATALOG}.test_write_mode_fix%'
+        """)
+        metadata_count = spark.sql(f"""
+            SELECT COUNT(*) as count FROM {INGESTION_METADATA_TABLE}
+            WHERE table_name LIKE '{TEST_CATALOG}.test_write_mode_fix%'
+        """).collect()[0]['count']
+        print(f"   ✓ Cleaned {INGESTION_METADATA_TABLE} (remaining: {metadata_count})")
     except Exception as e:
         print(f"   ⚠ Could not clean metadata: {e}")
     
+    # Clean audit
     try:
-        spark.sql(f"DELETE FROM {INGESTION_AUDIT_TABLE} WHERE group_name = '{TEST_GROUP}'")
-        print(f"   ✓ Cleaned {INGESTION_AUDIT_TABLE}")
+        deleted = spark.sql(f"""
+            DELETE FROM {INGESTION_AUDIT_TABLE} 
+            WHERE group_name LIKE 'test_write_mode%'
+        """)
+        audit_count = spark.sql(f"""
+            SELECT COUNT(*) as count FROM {INGESTION_AUDIT_TABLE}
+            WHERE group_name LIKE 'test_write_mode%'
+        """).collect()[0]['count']
+        print(f"   ✓ Cleaned {INGESTION_AUDIT_TABLE} (remaining: {audit_count})")
     except Exception as e:
         print(f"   ⚠ Could not clean audit: {e}")
     
-    print("\n✓ Cleanup completed!")
+    print("\n✓ Cleanup completed! All old test data removed.")
 else:
     print("\n⚠ Cleanup skipped!")
 
+print("\nCurrent test will use:")
+print(f"  Schema: {TEST_SCHEMA}")
+print(f"  Group: {TEST_GROUP}")
+print(f"  DBFS Path: {DBFS_BASE_PATH}")
 print("="*80)
 
 # COMMAND ----------
@@ -998,25 +1047,25 @@ print("="*80)
 
 # COMMAND ----------
 
-# DBTITLE 1,Cleanup (Optional)
+# DBTITLE 1,Final Cleanup (Run After Testing)
 print("\n" + "="*80)
-print("CLEANUP (Optional - Set CLEANUP = True to execute)")
+print("FINAL CLEANUP - Remove This Test Run's Data")
 print("="*80)
 
-CLEANUP = False  # Set to True to cleanup test data
+CLEANUP = False  # Set to True to cleanup THIS test run's data
 
 if CLEANUP:
-    print("\nCleaning up test data...")
+    print(f"\nCleaning up test data for: {TEST_SCHEMA}")
     
     try:
         spark.sql(f"DROP SCHEMA IF EXISTS {TEST_CATALOG}.{TEST_SCHEMA} CASCADE")
-        print(f"  ✓ Dropped schema")
+        print(f"  ✓ Dropped schema: {TEST_SCHEMA}")
     except Exception as e:
         print(f"  ⚠ {e}")
     
     try:
         dbutils.fs.rm(DBFS_BASE_PATH, recurse=True)
-        print(f"  ✓ Removed DBFS files")
+        print(f"  ✓ Removed DBFS files: {DBFS_BASE_PATH}")
     except Exception as e:
         print(f"  ⚠ {e}")
     
@@ -1024,13 +1073,20 @@ if CLEANUP:
         spark.sql(f"DELETE FROM {INGESTION_CONFIG_TABLE} WHERE group_name = '{TEST_GROUP}'")
         spark.sql(f"DELETE FROM {INGESTION_METADATA_TABLE} WHERE table_name LIKE '{TEST_CATALOG}.{TEST_SCHEMA}.%'")
         spark.sql(f"DELETE FROM {INGESTION_AUDIT_TABLE} WHERE group_name = '{TEST_GROUP}'")
-        print(f"  ✓ Cleaned metadata tables")
+        print(f"  ✓ Cleaned metadata tables for: {TEST_GROUP}")
     except Exception as e:
         print(f"  ⚠ {e}")
     
     print("\n✓ Cleanup completed!")
+    print(f"\nTest run {TIMESTAMP} has been removed.")
 else:
     print("\n⚠ Cleanup skipped (CLEANUP = False)")
-    print("  Set CLEANUP = True and re-run this cell to cleanup test data")
+    print("  To cleanup this test run:")
+    print("  1. Set CLEANUP = True")
+    print("  2. Re-run this cell")
+    print(f"\nThis will remove:")
+    print(f"  - Schema: {TEST_SCHEMA}")
+    print(f"  - DBFS Path: {DBFS_BASE_PATH}")
+    print(f"  - Metadata for group: {TEST_GROUP}")
 
 print("="*80)

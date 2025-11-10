@@ -478,90 +478,53 @@ def get_file_metadata_recursive(path):
         return []
 
 # 1. Insert into serving_ingestion_config
-config_entries = []
+# Use SQL INSERT instead of DataFrame to avoid type inference issues with None values
+
+print("\nInserting config entries...")
 
 # OVERWRITE table config
-config_entries.append({
-    "config_id": f"PROD_TEST_001_{RUN_ID}",
-    "group_name": TEST_GROUP,
-    "source_schema": "source_transactions",
-    "source_table": "transaction_summary",
-    "source_file_path": overwrite_source_path,
-    "target_catalog": TEST_CATALOG,
-    "target_schema": TEST_SCHEMA,
-    "target_table": "transaction_summary",
-    "source_file_format": "orc",
-    "source_file_options": None,
-    "load_type": "hive_full",
-    "write_mode": "overwrite",
-    "primary_key": "order_id",
-    "partition_column": None,
-    "partitioning_strategy": None,
-    "frequency": "daily",
-    "table_size_gb": "1",
-    "is_active": "Y",
-    "deduplicate": "N",
-    "clean_column_names": "N",
-    "insert_ts": datetime.now(),
-    "last_update_ts": datetime.now()
-})
+spark.sql(f"""
+    INSERT INTO {INGESTION_CONFIG_TABLE} 
+    (config_id, group_name, source_schema, source_table, source_file_path, 
+     target_catalog, target_schema, target_table, source_file_format, source_file_options,
+     load_type, write_mode, primary_key, partition_column, partitioning_strategy,
+     frequency, table_size_gb, is_active, deduplicate, clean_column_names, insert_ts, last_update_ts)
+    VALUES 
+    ('PROD_TEST_001_{RUN_ID}', '{TEST_GROUP}', 'source_transactions', 'transaction_summary', 
+     '{overwrite_source_path}', '{TEST_CATALOG}', '{TEST_SCHEMA}', 'transaction_summary', 
+     'orc', NULL, 'hive_full', 'overwrite', 'order_id', NULL, NULL,
+     'daily', '1', 'Y', 'N', 'N', current_timestamp(), current_timestamp())
+""")
 
 # PARTITION_OVERWRITE table config
-config_entries.append({
-    "config_id": f"PROD_TEST_002_{RUN_ID}",
-    "group_name": TEST_GROUP,
-    "source_schema": "source_orders",
-    "source_table": "daily_orders",
-    "source_file_path": partition_overwrite_source_path,
-    "target_catalog": TEST_CATALOG,
-    "target_schema": TEST_SCHEMA,
-    "target_table": "daily_orders_partitioned",
-    "source_file_format": "orc",
-    "source_file_options": None,
-    "load_type": "incremental",
-    "write_mode": "partition_overwrite",
-    "primary_key": "order_id",
-    "partition_column": "partition_date",
-    "partitioning_strategy": "PARTITIONED_BY",
-    "frequency": "daily",
-    "table_size_gb": "1",
-    "is_active": "Y",
-    "deduplicate": "N",
-    "clean_column_names": "N",
-    "insert_ts": datetime.now(),
-    "last_update_ts": datetime.now()
-})
+spark.sql(f"""
+    INSERT INTO {INGESTION_CONFIG_TABLE} 
+    (config_id, group_name, source_schema, source_table, source_file_path, 
+     target_catalog, target_schema, target_table, source_file_format, source_file_options,
+     load_type, write_mode, primary_key, partition_column, partitioning_strategy,
+     frequency, table_size_gb, is_active, deduplicate, clean_column_names, insert_ts, last_update_ts)
+    VALUES 
+    ('PROD_TEST_002_{RUN_ID}', '{TEST_GROUP}', 'source_orders', 'daily_orders', 
+     '{partition_overwrite_source_path}', '{TEST_CATALOG}', '{TEST_SCHEMA}', 'daily_orders_partitioned', 
+     'orc', NULL, 'incremental', 'partition_overwrite', 'order_id', 'partition_date', 'PARTITIONED_BY',
+     'daily', '1', 'Y', 'N', 'N', current_timestamp(), current_timestamp())
+""")
 
 # APPEND table config
-config_entries.append({
-    "config_id": f"PROD_TEST_003_{RUN_ID}",
-    "group_name": TEST_GROUP,
-    "source_schema": "source_history",
-    "source_table": "order_history",
-    "source_file_path": append_source_path,
-    "target_catalog": TEST_CATALOG,
-    "target_schema": TEST_SCHEMA,
-    "target_table": "order_history",
-    "source_file_format": "orc",
-    "source_file_options": None,
-    "load_type": "incremental",
-    "write_mode": "append",
-    "primary_key": "order_id",
-    "partition_column": "partition_date",
-    "partitioning_strategy": "PARTITIONED_BY",
-    "frequency": "daily",
-    "table_size_gb": "1",
-    "is_active": "Y",
-    "deduplicate": "N",
-    "clean_column_names": "N",
-    "insert_ts": datetime.now(),
-    "last_update_ts": datetime.now()
-})
+spark.sql(f"""
+    INSERT INTO {INGESTION_CONFIG_TABLE} 
+    (config_id, group_name, source_schema, source_table, source_file_path, 
+     target_catalog, target_schema, target_table, source_file_format, source_file_options,
+     load_type, write_mode, primary_key, partition_column, partitioning_strategy,
+     frequency, table_size_gb, is_active, deduplicate, clean_column_names, insert_ts, last_update_ts)
+    VALUES 
+    ('PROD_TEST_003_{RUN_ID}', '{TEST_GROUP}', 'source_history', 'order_history', 
+     '{append_source_path}', '{TEST_CATALOG}', '{TEST_SCHEMA}', 'order_history', 
+     'orc', NULL, 'incremental', 'append', 'order_id', 'partition_date', 'PARTITIONED_BY',
+     'daily', '1', 'Y', 'N', 'N', current_timestamp(), current_timestamp())
+""")
 
-# Insert config entries
-config_df = spark.createDataFrame(config_entries)
-config_df.write.mode("append").saveAsTable(INGESTION_CONFIG_TABLE)
-print(f"\n✓ Inserted {len(config_entries)} entries into {INGESTION_CONFIG_TABLE}")
+print(f"✓ Inserted 3 entries into {INGESTION_CONFIG_TABLE}")
 
 # 2. Insert into serving_ingestion_metadata
 metadata_entries = []

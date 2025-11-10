@@ -282,9 +282,10 @@ class SourceTargetLoader:
                 regexp_extract(col("_metadata.file_path"), pattern, 1)
             )
             
-            # Verify extraction worked (show sample)
-            sample_values = result_df.select(part_col).distinct().limit(5).collect()
-            sample_values = [row[part_col] for row in sample_values if row[part_col]]
+            # Verify extraction worked (show sample) - optimized with take() instead of distinct().collect()
+            # take(5) is much faster as it doesn't require full scan + distinct
+            sample_rows = result_df.select(part_col).take(5)
+            sample_values = list(set([row[part_col] for row in sample_rows if row[part_col]]))[:5]
             
             self.logger.info(f"    Extracted '{part_col}' values (sample): {sample_values}")
             

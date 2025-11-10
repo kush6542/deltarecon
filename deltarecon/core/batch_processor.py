@@ -3,7 +3,7 @@ Batch processor - Identifies which batches need validation
 
 Logic:
 - For append mode: Process all unvalidated COMPLETED batches
-- For partition_overwrite mode: Process all unvalidated COMPLETED batches
+- For partition_overwrite mode: Process all unvalidated COMPLETED batches 
 - For merge mode: Process all unvalidated COMPLETED batches
 - For overwrite mode: Process only latest COMPLETED batch
 - Skip batches that are already validated successfully
@@ -12,7 +12,7 @@ Logic:
 Note: Loaded via %run - constants, TableConfig, exceptions, logger available in namespace
 """
 
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 from pyspark.sql import SparkSession
 
 from deltarecon.config import constants
@@ -174,9 +174,222 @@ class BatchProcessor:
                 f"Could not verify batch mapping (non-critical): {str(e)}"
             )
     
+    def _extract_partitions_from_path(
+        self, 
+        file_path: str, 
+        partition_columns: List[str]
+    ) -> Optional[Tuple[str, ...]]:
+        """
+        Extract partition values from Hive-style partitioned file path
+        
+        Examples:
+            Single partition:
+                path: '/data/partition_date=2025-11-05/file.orc'
+                columns: ['partition_date']
+                returns: ('2025-11-05',)
+            
+            Multiple partitions:
+                path: '/data/year=2025/month=11/day=05/file.orc'
+                columns: ['year', 'month', 'day']
+                returns: ('2025', '11', '05')
+        
+        Args:
+            file_path: Full path to source file
+            partition_columns: List of partition column names
+        
+        Returns:
+            Tuple of partition values in order, or None if extraction fails
+        """
+        import re
+        
+        partition_values = []
+        
+        for part_col in partition_columns:
+            pattern = f"{part_col}=([^/]+)"
+            match = re.search(pattern, file_path)
+            
+            if match:
+                partition_values.append(match.group(1))
+            else:
+                # Partition column not found in path - return None
+                return None
+        
+        return tuple(partition_values)
+    
+    def get_latest_batch_per_partition(
+        self, 
+        config: TableConfig
+    ) -> Dict[Tuple[str, ...], str]:
+        """
+        Get the latest batch for each partition combination
+        
+        This is used for partition_overwrite mode to identify which batches
+        should be validated (only the latest per partition - Option A).
+        
+        Args:
+            config: Table configuration with partition info
+        
+        Returns:
+            Dict mapping partition_tuple -> latest_batch_id
+            
+            Examples:
+                Single partition:
+                    {('2025-11-05',): '202511070612',
+                     ('2025-11-06',): '202511060606'}
+                
+                Multiple partitions:
+                    {('2025', '11', '05'): '202511070612',
+                     ('2025', '11', '06'): '202511060606'}
+        
+        Raises:
+            BatchProcessingError: If query fails
+        """
+        if config.write_mode != "partition_overwrite":
+            return {}
+        
+        if not config.is_partitioned:
+            self.logger.warning(
+                f"partition_overwrite mode but no partitions defined for {config.table_name}"
+            )
+            return {}
+        
+        self.logger.info(
+            f"Building latest batch mapping for partitions: {config.partition_columns}"
+        )
+        
+        try:
+            # Query all completed batches with their file paths
+            query = f"""
+                SELECT 
+                    t2.batch_load_id,
+                    t1.source_file_path
+                FROM {constants.INGESTION_METADATA_TABLE} t1
+                INNER JOIN {constants.INGESTION_AUDIT_TABLE} t2
+                    ON t1.table_name = t2.target_table_name 
+                    AND t1.batch_load_id = t2.batch_load_id
+                WHERE t2.status = 'COMPLETED'
+                    AND t1.table_name = '{config.table_name}'
+                ORDER BY t2.batch_load_id DESC
+            """
+            
+            rows = self.spark.sql(query).collect()
+            
+            if not rows:
+                self.logger.info("No completed batches found")
+                return {}
+            
+            # Build mapping: partition_tuple -> latest_batch_id
+            partition_to_latest_batch = {}
+            batch_to_partitions = {}  # For logging
+            
+            for row in rows:
+                batch_id = row.batch_load_id
+                file_path = row.source_file_path
+                
+                # Extract partition values from file path
+                partition_tuple = self._extract_partitions_from_path(
+                    file_path,
+                    config.partition_columns
+                )
+                
+                if partition_tuple:
+                    # Track which partitions this batch wrote to
+                    if batch_id not in batch_to_partitions:
+                        batch_to_partitions[batch_id] = set()
+                    batch_to_partitions[batch_id].add(partition_tuple)
+                    
+                    # Update latest batch for this partition
+                    if partition_tuple not in partition_to_latest_batch:
+                        partition_to_latest_batch[partition_tuple] = batch_id
+                    elif batch_id > partition_to_latest_batch[partition_tuple]:
+                        partition_to_latest_batch[partition_tuple] = batch_id
+            
+            self.logger.info(
+                f"Found {len(partition_to_latest_batch)} unique partition(s) "
+                f"across {len(batch_to_partitions)} batch(es)"
+            )
+            
+            return partition_to_latest_batch
+            
+        except Exception as e:
+            error_msg = f"Failed to build partition mapping for {config.table_name}: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            raise BatchProcessingError(error_msg)
+    
+    def _is_batch_latest_for_its_partitions(
+        self,
+        batch_id: str,
+        batch_file_paths: List[str],
+        latest_per_partition: Dict[Tuple[str, ...], str],
+        config: TableConfig
+    ) -> bool:
+        """
+        Check if this batch is the latest for ALL partitions it wrote to
+        
+        A batch should only be validated if it's the latest for ALL its partitions.
+        If ANY partition was overwritten by a later batch, skip this batch.
+        
+        Args:
+            batch_id: Batch ID to check
+            batch_file_paths: List of file paths in this batch
+            latest_per_partition: Mapping of partition -> latest batch
+            config: Table configuration
+        
+        Returns:
+            True if batch is latest for ALL its partitions, False otherwise
+        """
+        batch_partitions = set()
+        
+        # Extract all unique partitions this batch wrote to
+        for file_path in batch_file_paths:
+            partition_tuple = self._extract_partitions_from_path(
+                file_path,
+                config.partition_columns
+            )
+            if partition_tuple:
+                batch_partitions.add(partition_tuple)
+        
+        if not batch_partitions:
+            self.logger.warning(
+                f"Could not extract partition values from batch {batch_id} file paths. "
+                f"Including batch for validation (safe default)."
+            )
+            return True  # If we can't determine, include the batch (safe default)
+        
+        # Check if this batch is latest for ALL its partitions
+        overwritten_partitions = []
+        
+        for partition_tuple in batch_partitions:
+            latest_batch = latest_per_partition.get(partition_tuple)
+            
+            if latest_batch != batch_id:
+                # This partition was overwritten by a later batch
+                overwritten_partitions.append(
+                    (partition_tuple, latest_batch)
+                )
+        
+        if overwritten_partitions:
+            self.logger.info(
+                f"  ⏭️  Batch {batch_id} - SKIPPED (partitions overwritten):"
+            )
+            for part_tuple, latest_batch in overwritten_partitions[:3]:  # Show max 3
+                self.logger.info(
+                    f"      Partition {part_tuple} overwritten by {latest_batch}"
+                )
+            if len(overwritten_partitions) > 3:
+                self.logger.info(
+                    f"      ... and {len(overwritten_partitions) - 3} more partition(s)"
+                )
+            return False
+        
+        return True
+    
     def get_unprocessed_batches_with_mapping(self, config: TableConfig) -> Dict[str, List[str]]:
         """
         Get batches that need validation with batch-to-path mapping
+        
+        For partition_overwrite mode: Applies Option A filtering (only latest batch per partition)
+        For other modes: Returns all unprocessed batches
         
         This method is designed for batch-level auditing where each batch is validated separately.
         
@@ -195,7 +408,7 @@ class BatchProcessor:
         self.logger.info(f"  Write mode: {config.write_mode}")
         
         try:
-            # Same query as get_unprocessed_batches but we preserve the relationship
+            # Query to get ALL unprocessed batches (initial selection)
             query = f"""
                 SELECT
                     t1.source_file_path,
@@ -253,7 +466,47 @@ class BatchProcessor:
                     batch_mapping[batch_id] = []
                 batch_mapping[batch_id].append(orc_path)
             
-            self.logger.info(f"Found {len(batch_mapping)} unprocessed batch(es): {list(batch_mapping.keys())}")
+            self.logger.info(
+                f"Found {len(batch_mapping)} unprocessed batch(es): {list(batch_mapping.keys())}"
+            )
+            
+            # OPTION A: For partition_overwrite, filter to only latest per partition
+            if config.write_mode == "partition_overwrite" and config.is_partitioned:
+                self.logger.info("Applying Option A filter: keeping only latest batch per partition")
+                
+                # Get latest batch for each partition
+                latest_per_partition = self.get_latest_batch_per_partition(config)
+                
+                if not latest_per_partition:
+                    self.logger.warning(
+                        "Could not determine latest batches per partition. "
+                        "Proceeding with all batches (may have false failures)."
+                    )
+                else:
+                    # Filter batches: keep only those that are latest for their partitions
+                    filtered_mapping = {}
+                    skipped_count = 0
+                    
+                    for batch_id, file_paths in batch_mapping.items():
+                        if self._is_batch_latest_for_its_partitions(
+                            batch_id, 
+                            file_paths, 
+                            latest_per_partition, 
+                            config
+                        ):
+                            filtered_mapping[batch_id] = file_paths
+                            self.logger.info(f" {batch_id} - latest for its partition(s)")
+                        else:
+                            skipped_count += 1
+                    
+                    self.logger.info(
+                        f"Option A filtering: {len(filtered_mapping)} batch(es) kept, "
+                        f"{skipped_count} batch(es) skipped"
+                    )
+                    
+                    batch_mapping = filtered_mapping
+            
+            # Log final batch counts
             for batch_id, paths in batch_mapping.items():
                 self.logger.info(f"  {batch_id}: {len(paths)} file(s)")
             

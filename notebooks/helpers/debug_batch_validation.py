@@ -9,9 +9,11 @@
 # MAGIC - Uses framework's file selection logic
 # MAGIC - **Detailed file reading information** - shows exactly which files are being read from source and target
 # MAGIC - **Framework-based target filtering** - uses write_mode logic (overwrite vs append/merge/partition_overwrite)
+# MAGIC - **Partition extraction visualization** - for partition_overwrite mode, shows extracted partition values
+# MAGIC - **Clear target loading strategy** - explains HOW target data is filtered based on write mode
 # MAGIC - Works with production and test environments
 # MAGIC - Prints all files being read for transparency
-# MAGIC - Shows write_mode-specific behavior (e.g., "overwrite mode: reading entire table")
+# MAGIC - Shows write_mode-specific behavior with detailed explanations
 # MAGIC 
 # MAGIC **How to use:**
 # MAGIC 1. Fill in the widgets at the top
@@ -158,11 +160,60 @@ print("="*70)
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## Execution Plan Summary
+
+# COMMAND ----------
+
+print("\n" + "="*70)
+print("EXECUTION PLAN - HOW THIS VALIDATION WILL WORK")
+print("="*70)
+print(f"\n1️⃣  IDENTIFY SOURCE FILES:")
+print(f"   - Query ingestion_metadata table for batch '{BATCH_LOAD_ID}'")
+print(f"   - Extract source file paths that were ingested")
+
+print(f"\n2️⃣  LOAD SOURCE DATA:")
+print(f"   - Format: {ingestion_config.source_file_format}")
+if partition_columns:
+    print(f"   - Extract partition columns from file paths: {partition_columns}")
+print(f"   - Apply file options: {source_file_options if source_file_options else 'None'}")
+
+print(f"\n3️⃣  LOAD TARGET DATA:")
+print(f"   - Table: {TARGET_TABLE}")
+print(f"   - Write mode: {ingestion_config.write_mode}")
+
+if ingestion_config.write_mode.lower() == "overwrite":
+    print(f"   - Strategy: Load ENTIRE table (no filtering)")
+    print(f"   - Reason: Overwrite mode = entire table is the current batch")
+elif ingestion_config.write_mode.lower() == "partition_overwrite":
+    print(f"   - Strategy: Filter by PARTITION VALUES from source")
+    print(f"   - Partitions: {partition_columns}")
+    print(f"   - Reason: partition_overwrite overwrites old batch_ids")
+    print(f"   - Note: Uses Option A logic - validates latest state per partition")
+elif ingestion_config.write_mode.lower() in ["append", "merge"]:
+    print(f"   - Strategy: Filter by _aud_batch_load_id = '{BATCH_LOAD_ID}'")
+    print(f"   - Reason: {ingestion_config.write_mode} mode preserves all batch_ids")
+
+print(f"\n4️⃣  RUN VALIDATION CHECKS:")
+print(f"   - Row Count: Compare source vs target row counts")
+print(f"   - Schema: Verify column names and types match")
+if primary_keys:
+    print(f"   - PK Duplicates: Check for duplicates in {primary_keys}")
+if RUN_RECONCILIATION:
+    print(f"   - Data Reconciliation: Compare row-level data hashes")
+
+print("="*70)
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Find Source Files for Batch (Using Framework Logic)
 
 # COMMAND ----------
 
-print("Locating source files for batch using framework's file selection logic...")
+print("\n" + "="*70)
+print("STEP 1: LOCATE SOURCE FILES")
+print("="*70)
+print("Querying ingestion_metadata table for batch files...")
 print(f"File format: {ingestion_config.source_file_format}")
 
 # Query the ingestion_metadata table to find files for this batch
@@ -200,17 +251,24 @@ print("="*70)
 
 # COMMAND ----------
 
+print("\n" + "="*70)
+print("STEP 2: SOURCE DATA LOADING")
 print("="*70)
-print("SOURCE DATA LOADING")
-print("="*70)
-print(f"File format: {ingestion_config.source_file_format}")
-print(f"Write mode: {ingestion_config.write_mode}")
-print(f"\nFiles to read ({len(source_file_paths)}):")
+print(f"📋 Configuration:")
+print(f"   File format: {ingestion_config.source_file_format}")
+print(f"   Write mode: {ingestion_config.write_mode}")
+print(f"   Batch ID: {BATCH_LOAD_ID}")
+if partition_columns:
+    print(f"   Partition columns: {partition_columns}")
+if source_file_options:
+    print(f"   File options: {source_file_options}")
+
+print(f"\n📂 Source files to read ({len(source_file_paths)}):")
 for i, path in enumerate(source_file_paths, 1):
-    print(f"  [{i}] {path}")
+    print(f"   [{i}] {path}")
 
 print("\n" + "-"*70)
-print("Loading source data files...")
+print("⏳ Loading source data files...")
 print("-"*70)
 
 try:
@@ -218,24 +276,38 @@ try:
     
     # Load based on format
     if file_format == "orc":
-        print("  Loading ORC files...")
+        print("  ✓ Loading ORC files...")
+        print("    Format: Apache ORC (Optimized Row Columnar)")
+        print("    Options: None (ORC is self-describing)")
         source_df = spark.read.format("orc").load(source_file_paths)
         
     elif file_format == "csv":
-        print("  Loading CSV files...")
+        print("  ✓ Loading CSV files...")
+        print("    Format: CSV (Comma-Separated Values)")
         reader = spark.read.format("csv")
         
         # Apply CSV options
+        options_applied = []
         if "header" in source_file_options:
             reader = reader.option("header", source_file_options["header"])
+            options_applied.append(f"header={source_file_options['header']}")
         if "sep" in source_file_options:
             reader = reader.option("sep", source_file_options["sep"])
+            options_applied.append(f"sep='{source_file_options['sep']}'")
         if "quote" in source_file_options:
             reader = reader.option("quote", source_file_options["quote"])
+            options_applied.append(f"quote='{source_file_options['quote']}'")
         if "escape" in source_file_options:
             reader = reader.option("escape", source_file_options["escape"])
+            options_applied.append(f"escape='{source_file_options['escape']}'")
         if "multiline" in source_file_options:
             reader = reader.option("multiline", source_file_options["multiline"])
+            options_applied.append(f"multiline={source_file_options['multiline']}")
+        
+        if options_applied:
+            print(f"    Options applied: {', '.join(options_applied)}")
+        else:
+            print(f"    Options applied: None (using defaults)")
         
         # Apply schema if provided
         if "schema" in source_file_options:
@@ -243,28 +315,42 @@ try:
             try:
                 schema = StructType.fromDDL(source_file_options["schema"])
                 reader = reader.schema(schema)
-                print(f"    Applied explicit schema from options")
+                print(f"    Schema: Explicit schema provided")
             except Exception as e:
-                print(f"    WARNING: Failed to parse schema: {e}. Will infer schema.")
+                print(f"    ⚠️  WARNING: Failed to parse schema: {e}. Will infer schema.")
+        else:
+            print(f"    Schema: Will be inferred from data")
         
         source_df = reader.load(source_file_paths)
         
     elif file_format == "text":
-        print("  Loading Text files...")
+        print("  ✓ Loading Text files...")
+        print("    Format: Text (CSV-based with custom separator)")
         # Text files are just CSV with different separators
         reader = spark.read.format("csv")
         
         # Apply text/CSV options
+        options_applied = []
         if "header" in source_file_options:
             reader = reader.option("header", source_file_options["header"])
+            options_applied.append(f"header={source_file_options['header']}")
         if "sep" in source_file_options:
             reader = reader.option("sep", source_file_options["sep"])
+            options_applied.append(f"sep='{source_file_options['sep']}'")
         if "quote" in source_file_options:
             reader = reader.option("quote", source_file_options["quote"])
+            options_applied.append(f"quote='{source_file_options['quote']}'")
         if "escape" in source_file_options:
             reader = reader.option("escape", source_file_options["escape"])
+            options_applied.append(f"escape='{source_file_options['escape']}'")
         if "multiline" in source_file_options:
             reader = reader.option("multiline", source_file_options["multiline"])
+            options_applied.append(f"multiline={source_file_options['multiline']}")
+        
+        if options_applied:
+            print(f"    Options applied: {', '.join(options_applied)}")
+        else:
+            print(f"    Options applied: None (using defaults)")
         
         # Apply schema if provided
         if "schema" in source_file_options:
@@ -272,9 +358,11 @@ try:
             try:
                 schema = StructType.fromDDL(source_file_options["schema"])
                 reader = reader.schema(schema)
-                print(f"    Applied explicit schema from options")
+                print(f"    Schema: Explicit schema provided")
             except Exception as e:
-                print(f"    WARNING: Failed to parse schema: {e}. Will infer schema.")
+                print(f"    ⚠️  WARNING: Failed to parse schema: {e}. Will infer schema.")
+        else:
+            print(f"    Schema: Will be inferred from data")
         
         source_df = reader.load(source_file_paths)
         
@@ -336,12 +424,13 @@ except Exception as e:
 
 # COMMAND ----------
 
+print("\n" + "="*70)
+print("STEP 3: TARGET DATA LOADING")
 print("="*70)
-print("TARGET DATA LOADING")
-print("="*70)
-print(f"Target table: {TARGET_TABLE}")
-print(f"Write mode: {ingestion_config.write_mode}")
-print(f"Batch ID: {BATCH_LOAD_ID}")
+print(f"📋 Configuration:")
+print(f"   Target table: {TARGET_TABLE}")
+print(f"   Write mode: {ingestion_config.write_mode}")
+print(f"   Batch ID: {BATCH_LOAD_ID}")
 
 try:
     # Use framework logic to determine filtering based on write mode
@@ -367,15 +456,83 @@ try:
             print(f"\n⚠️  Note: Validating batch '{BATCH_LOAD_ID}' but table contains {actual_batches}")
             print(f"   This is EXPECTED for overwrite mode - entire current table represents this batch")
     
-    elif ingestion_config.write_mode.lower() in ["append", "merge", "partition_overwrite"]:
-        # APPEND/MERGE/PARTITION_OVERWRITE: Multiple batches coexist
-        # Filter by batch_id to isolate this batch's data
+    elif ingestion_config.write_mode.lower() == "partition_overwrite":
+        # PARTITION_OVERWRITE: Uses partition-based filtering (not batch_id)
+        print("\n" + "-"*70)
+        print("PARTITION_OVERWRITE MODE DETECTED")
+        print("-"*70)
+        print("📋 Target Loading Strategy: Filter by PARTITION VALUES from source")
+        print("   Reason: In partition_overwrite mode, old batch_ids are overwritten")
+        print("   Framework logic: Extract partition values from source, then filter target")
+        print("-"*70)
+        
+        if not partition_columns:
+            raise ValueError("partition_overwrite mode requires partition_columns to be configured")
+        
+        # Extract partition values from source (matching framework logic)
+        print(f"\n🔍 Step 1: Extract partition values from SOURCE data")
+        print(f"   Partition columns: {partition_columns}")
+        
+        partition_values = {}
+        for part_col in partition_columns:
+            if part_col not in source_df.columns:
+                raise ValueError(f"Partition column '{part_col}' not found in source data")
+            
+            distinct_vals = [row[part_col] for row in source_df.select(part_col).distinct().collect()]
+            partition_values[part_col] = distinct_vals
+            
+            print(f"   • {part_col}: {len(distinct_vals)} distinct value(s)")
+            # Show first 10 values
+            for val in distinct_vals[:10]:
+                print(f"      - {val}")
+            if len(distinct_vals) > 10:
+                print(f"      ... and {len(distinct_vals) - 10} more")
+        
+        # Build WHERE clause (matching framework logic)
+        print(f"\n🔧 Step 2: Build SQL WHERE clause for target filtering")
+        where_conditions = []
+        for part_col, values in partition_values.items():
+            if len(values) == 1:
+                val = values[0]
+                if isinstance(val, str):
+                    where_conditions.append(f"{part_col} = '{val}'")
+                else:
+                    where_conditions.append(f"{part_col} = {val}")
+                print(f"   • {part_col} = {val}")
+            else:
+                # Multiple values - use IN clause
+                if isinstance(values[0], str):
+                    val_list = ", ".join([f"'{v}'" for v in values])
+                else:
+                    val_list = ", ".join([str(v) for v in values])
+                where_conditions.append(f"{part_col} IN ({val_list})")
+                print(f"   • {part_col} IN ({len(values)} values)")
+        
+        where_clause = " AND ".join(where_conditions)
+        
+        print(f"\n📝 Final WHERE clause:")
+        print(f"   {where_clause}")
+        print(f"\n💡 What this means:")
+        print(f"   - We're loading ONLY the partitions that exist in the source data")
+        print(f"   - Target may contain data from MULTIPLE batches (whatever is current)")
+        print(f"   - This validates current state vs. source batch")
+        print("-"*70)
+        
+        # Execute query
+        target_df = spark.sql(f"""
+            SELECT * FROM {TARGET_TABLE}
+            WHERE {where_clause}
+        """)
+    
+    elif ingestion_config.write_mode.lower() in ["append", "merge"]:
+        # APPEND/MERGE: Multiple batches coexist, filter by batch_id
         print("\n" + "-"*70)
         print(f"{ingestion_config.write_mode.upper()} MODE DETECTED")
         print("-"*70)
-        print(f"📋 Filtering by batch_id = '{BATCH_LOAD_ID}'")
-        print(f"   Reason: In {ingestion_config.write_mode} mode, multiple batches coexist")
-        print(f"   Framework logic: Use WHERE clause for data skipping")
+        print(f"📋 Target Loading Strategy: Filter by batch_id")
+        print(f"   Filter: _aud_batch_load_id = '{BATCH_LOAD_ID}'")
+        print(f"   Reason: In {ingestion_config.write_mode} mode, batches coexist with unique batch_ids")
+        print(f"   Framework logic: Use WHERE clause for predicate pushdown")
         print("-"*70)
         
         # Use SQL WHERE clause for predicate pushdown and data skipping
@@ -383,12 +540,6 @@ try:
             SELECT * FROM {TARGET_TABLE}
             WHERE _aud_batch_load_id = '{BATCH_LOAD_ID}'
         """)
-        
-        # For partition_overwrite, log additional info
-        if ingestion_config.write_mode.lower() == "partition_overwrite" and partition_columns:
-            print(f"\n✓ Partition columns: {partition_columns}")
-            print(f"⚠️  Note: If this batch's partitions were overwritten by a later batch,")
-            print(f"   the filter may return incomplete data.")
     
     else:
         raise ValueError(f"Unsupported write_mode: {ingestion_config.write_mode}")
@@ -402,13 +553,36 @@ try:
     print(f"✓ Rows: {tgt_count:,}")
     print(f"✓ Columns: {len(target_df.columns)}")
     
+    # For partition_overwrite, show which batch_ids are actually in the filtered data
+    if ingestion_config.write_mode.lower() == "partition_overwrite" and tgt_count > 0:
+        actual_batches = [row['_aud_batch_load_id'] for row in 
+                        target_df.select("_aud_batch_load_id").distinct().limit(10).collect()]
+        print(f"\n📋 Batch IDs found in filtered target data:")
+        for batch in actual_batches:
+            if batch == BATCH_LOAD_ID:
+                print(f"   • {batch} ← (this is the batch we're validating)")
+            else:
+                print(f"   • {batch}")
+        if len(actual_batches) > 1:
+            print(f"\n💡 Note: Multiple batch_ids present because:")
+            print(f"   - partition_overwrite mode only overwrites SPECIFIC partitions")
+            print(f"   - Other partitions may contain data from different batches")
+            print(f"   - This is EXPECTED behavior")
+    
     # Safety check: warn if no data found
     if tgt_count == 0:
-        print(f"\n⚠️  WARNING: No data found in target table for batch '{BATCH_LOAD_ID}'")
-        print(f"   Possible causes:")
-        print(f"   1) Batch was overwritten (if overwrite/partition_overwrite mode)")
-        print(f"   2) Ingestion failed")
-        print(f"   3) Filter mismatch")
+        print(f"\n⚠️  WARNING: No data found in target table!")
+        print(f"   Batch: {BATCH_LOAD_ID}")
+        if ingestion_config.write_mode.lower() == "partition_overwrite":
+            print(f"   Possible causes:")
+            print(f"   1) Partitions were overwritten by a later batch")
+            print(f"   2) Partition values in source don't match target")
+            print(f"   3) Ingestion failed or incomplete")
+        else:
+            print(f"   Possible causes:")
+            print(f"   1) Batch was overwritten (if overwrite mode)")
+            print(f"   2) Ingestion failed")
+            print(f"   3) Filter mismatch")
     
     print("="*70)
     
@@ -437,12 +611,28 @@ if partition_columns:
 print(f"\n📊 TARGET DATA:")
 print(f"   Table: {TARGET_TABLE}")
 print(f"   Write mode: {ingestion_config.write_mode}")
+
 if ingestion_config.write_mode.lower() == "overwrite":
     print(f"   Filter applied: None (entire table loaded)")
     print(f"   Reason: Overwrite mode - entire table = current batch")
-else:
+
+elif ingestion_config.write_mode.lower() == "partition_overwrite":
+    print(f"   Filter applied: Partition values from source")
+    if partition_columns:
+        for part_col in partition_columns:
+            if part_col in partition_values:
+                vals = partition_values[part_col]
+                if len(vals) <= 3:
+                    print(f"      {part_col}: {vals}")
+                else:
+                    print(f"      {part_col}: {vals[:3]} ... ({len(vals)} total)")
+    print(f"   Reason: partition_overwrite mode - filter by current partition state")
+    print(f"   Note: Target may contain data from multiple batches")
+
+elif ingestion_config.write_mode.lower() in ["append", "merge"]:
     print(f"   Filter applied: _aud_batch_load_id = '{BATCH_LOAD_ID}'")
     print(f"   Reason: {ingestion_config.write_mode} mode - multiple batches coexist")
+
 print(f"   Total rows: {tgt_count:,}")
 print(f"   Total columns: {len(target_df.columns)}")
 
@@ -495,8 +685,8 @@ for field in target_df.schema.fields:
 
 # COMMAND ----------
 
-print("="*70)
-print("CHECK 1: ROW COUNT VALIDATION")
+print("\n" + "="*70)
+print("STEP 4.1: ROW COUNT VALIDATION")
 print("="*70)
 
 src_count = source_df.count()
@@ -526,8 +716,8 @@ print("="*70)
 
 # COMMAND ----------
 
-print("="*70)
-print("CHECK 2: SCHEMA VALIDATION")
+print("\n" + "="*70)
+print("STEP 4.2: SCHEMA VALIDATION")
 print("="*70)
 
 # Build schema dictionaries
@@ -598,8 +788,8 @@ print("="*70)
 
 # COMMAND ----------
 
-print("="*70)
-print("CHECK 3: PRIMARY KEY DUPLICATE CHECK")
+print("\n" + "="*70)
+print("STEP 4.3: PRIMARY KEY DUPLICATE CHECK")
 print("="*70)
 
 if not primary_keys:
@@ -683,8 +873,8 @@ print("="*70)
 # COMMAND ----------
 
 if not RUN_RECONCILIATION:
-    print("="*70)
-    print("CHECK 4: DATA RECONCILIATION")
+    print("\n" + "="*70)
+    print("STEP 4.4: DATA RECONCILIATION")
     print("="*70)
     print("SKIPPED (user selected N)")
     print("="*70)
@@ -692,8 +882,8 @@ if not RUN_RECONCILIATION:
     tgt_extras = 0
     matches = 0
 else:
-    print("="*70)
-    print("CHECK 4: DATA RECONCILIATION (Full Row Hash)")
+    print("\n" + "="*70)
+    print("STEP 4.4: DATA RECONCILIATION (Full Row Hash)")
     print("="*70)
     
     # Determine columns to include in hash
@@ -801,7 +991,7 @@ if RUN_RECONCILIATION:
         recon_status = "FAILED"
 
 print("\n" + "="*70)
-print("VALIDATION SUMMARY REPORT")
+print("STEP 5: VALIDATION SUMMARY REPORT")
 print("="*70)
 print(f"Table: {TARGET_TABLE}")
 print(f"Batch: {BATCH_LOAD_ID}")

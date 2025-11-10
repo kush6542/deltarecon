@@ -92,8 +92,8 @@ class SourceTargetLoader:
         # Load source
         source_df = self._load_source_data(source_file_paths, config)
         
-        # Load target
-        target_df = self._load_target_delta(config, batch_id)
+        # Load target (pass source_df for partition_overwrite filtering)
+        target_df = self._load_target_delta(config, batch_id, source_df)
         
         # Verify batch IDs match
         self._verify_batch_consistency(source_df, target_df, batch_id, config)
@@ -300,26 +300,153 @@ class SourceTargetLoader:
         
         return result_df
     
-    def _load_target_delta(self, config: TableConfig, batch_id: str) -> DataFrame:
+    def _extract_partition_values_from_source(
+        self, 
+        source_df: DataFrame, 
+        config: TableConfig
+    ) -> Dict[str, List]:
+        """
+        Extract distinct partition values from source DataFrame
+        
+        For partition_overwrite mode, we need to know which partition values
+        the source data contains so we can filter the target to only those partitions.
+        
+        Args:
+            source_df: Source DataFrame with partition columns
+            config: Table configuration with partition info
+        
+        Returns:
+            Dict mapping partition column name to list of distinct values
+            Example: {'partition_date': [date(2025, 11, 5), date(2025, 11, 6)]}
+        
+        Raises:
+            DataConsistencyError: If partition columns missing from source
+        """
+        partition_values = {}
+        
+        for part_col in config.partition_columns:
+            # Verify partition column exists in source
+            if part_col not in source_df.columns:
+                error_msg = (
+                    f"Partition column '{part_col}' not found in source DataFrame! "
+                    f"Available columns: {source_df.columns}. "
+                    f"This should not happen - partition extraction should have added this column."
+                )
+                self.logger.error(error_msg)
+                raise DataConsistencyError(error_msg)
+            
+            # Get distinct values
+            distinct_rows = source_df.select(part_col).distinct().collect()
+            values = [row[part_col] for row in distinct_rows]
+            
+            # Handle None/NULL values
+            if None in values:
+                error_msg = (
+                    f"Partition column '{part_col}' has NULL values in source! "
+                    f"This should not happen - partition extraction validation should have caught this."
+                )
+                self.logger.error(error_msg)
+                raise DataConsistencyError(error_msg)
+            
+            partition_values[part_col] = values
+        
+        return partition_values
+    
+    def _build_partition_filter_clause(
+        self, 
+        partition_values: Dict[str, List], 
+        config: TableConfig
+    ) -> str:
+        """
+        Build SQL WHERE clause for partition filtering
+        
+        Handles different data types correctly:
+        - String: 'value'
+        - Date: '2025-11-05' (cast to date in SQL)
+        - Timestamp: '2025-11-05 10:30:00' (cast to timestamp in SQL)
+        - Numeric: 123 (no quotes)
+        
+        Args:
+            partition_values: Dict of partition column to values
+            config: Table configuration with partition datatypes
+        
+        Returns:
+            SQL WHERE clause string
+            Example: "partition_date IN ('2025-11-05', '2025-11-06')"
+            Example: "year = 2025 AND month IN (10, 11)"
+        
+        Raises:
+            ValueError: If no partition values provided
+        """
+        if not partition_values:
+            raise ValueError("partition_values cannot be empty")
+        
+        conditions = []
+        
+        for part_col, values in partition_values.items():
+            if not values:
+                raise ValueError(f"No values for partition column '{part_col}'")
+            
+            # Get datatype for this partition column
+            dtype = config.partition_datatypes.get(part_col, 'string').lower()
+            
+            # Format values based on datatype
+            if dtype in ['date', 'timestamp', 'string']:
+                # Wrap in quotes and escape
+                formatted_values = [f"'{str(v)}'" for v in values]
+            elif dtype in ['int', 'integer', 'bigint', 'long', 'smallint', 'tinyint']:
+                # Numeric types - no quotes
+                formatted_values = [str(v) for v in values]
+            elif dtype in ['double', 'float', 'decimal']:
+                # Decimal types - no quotes
+                formatted_values = [str(v) for v in values]
+            elif dtype == 'boolean':
+                # Boolean - no quotes
+                formatted_values = [str(v).upper() for v in values]
+            else:
+                # Unknown type - default to string with quotes
+                self.logger.warning(
+                    f"Unknown datatype '{dtype}' for partition column '{part_col}'. "
+                    f"Treating as string."
+                )
+                formatted_values = [f"'{str(v)}'" for v in values]
+            
+            # Build IN clause
+            if len(formatted_values) == 1:
+                # Single value: use = instead of IN
+                conditions.append(f"{part_col} = {formatted_values[0]}")
+            else:
+                # Multiple values: use IN
+                values_str = ", ".join(formatted_values)
+                conditions.append(f"{part_col} IN ({values_str})")
+        
+        # Combine conditions with AND
+        where_clause = " AND ".join(conditions)
+        
+        return where_clause
+    
+    def _load_target_delta(self, config: TableConfig, batch_id: str, source_df: Optional[DataFrame] = None) -> DataFrame:
         """
         Load target Delta table with appropriate filtering based on write mode
         
         Logic:
         - overwrite mode: Load ALL data (no batch filter) - entire table IS the batch
-        - append/partition_overwrite/merge: Filter by batch_id - batches coexist
+        - partition_overwrite: Filter by PARTITION VALUES from source (not batch_id)
+        - append/merge: Filter by batch_id - batches coexist
         
         Uses SQL WHERE clause for predicate pushdown and Delta data skipping.
         
         Args:
             config: Table configuration (includes write_mode, partition info)
             batch_id: Batch ID to validate
+            source_df: Source DataFrame (required for partition_overwrite mode)
         
         Returns:
             Filtered DataFrame
         
         Raises:
             DataLoadError: If loading fails
-            ConfigurationError: If partition_overwrite used without partitions
+            ConfigurationError: If partition_overwrite used without partitions or source_df
         """
         self.logger.info(f"Loading target Delta table")
         self.logger.info(f"  Write mode: {config.write_mode}")
@@ -333,6 +460,16 @@ class SourceTargetLoader:
                     f"Invalid configuration for {config.table_name}: "
                     f"write_mode='partition_overwrite' requires partition_columns to be defined. "
                     f"Either add partition_columns or change write_mode."
+                )
+                self.logger.error(error_msg)
+                raise ConfigurationError(error_msg)
+            
+            # Validation: partition_overwrite requires source_df
+            if config.write_mode == "partition_overwrite" and source_df is None:
+                from deltarecon.utils.exceptions import ConfigurationError
+                error_msg = (
+                    f"partition_overwrite mode requires source_df to extract partition values. "
+                    f"This is a framework bug - source_df should be passed to _load_target_delta()."
                 )
                 self.logger.error(error_msg)
                 raise ConfigurationError(error_msg)
@@ -356,8 +493,40 @@ class SourceTargetLoader:
                         f"This is expected for overwrite mode - entire current table represents this batch."
                     )
             
-            elif config.write_mode in ["append", "merge", "partition_overwrite"]:
-                # APPEND/MERGE/PARTITION_OVERWRITE: Multiple batches coexist
+            elif config.write_mode == "partition_overwrite":
+                # PARTITION_OVERWRITE mode: Specific partitions are replaced
+                # The batch_id changes when partition is overwritten
+                # Solution: Filter by partition VALUES (not batch_id)
+                
+                self.logger.info(f"  PARTITION_OVERWRITE mode: Filtering by partition values from source")
+                self.logger.info(f"  Partition columns: {config.partition_columns}")
+                
+                # Extract partition values from source
+                partition_values = self._extract_partition_values_from_source(source_df, config)
+                
+                # Log extracted values
+                for part_col, values in partition_values.items():
+                    sample_values = values[:5] if len(values) > 5 else values
+                    self.logger.info(f"    {part_col}: {len(values)} distinct value(s) - {sample_values}")
+                
+                # Build WHERE clause
+                where_clause = self._build_partition_filter_clause(partition_values, config)
+                self.logger.info(f"  Filter clause: {where_clause}")
+                
+                # Execute query with partition filter
+                df_filtered = self.spark.sql(f"""
+                    SELECT * FROM {config.table_name}
+                    WHERE {where_clause}
+                """)
+                
+                self.logger.info(
+                    f"  Note: For partition_overwrite mode, we validate the CURRENT data "
+                    f"in these partitions, regardless of which batch wrote them. "
+                    f"This ensures validation works even if partitions were overwritten by later batches."
+                )
+            
+            elif config.write_mode in ["append", "merge"]:
+                # APPEND/MERGE: Multiple batches coexist
                 # Filter by batch_id to isolate this batch's data
                 self.logger.info(f"  {config.write_mode.upper()} mode: Filtering by batch_id = '{batch_id}'")
                 
@@ -366,15 +535,6 @@ class SourceTargetLoader:
                     SELECT * FROM {config.table_name}
                     WHERE _aud_batch_load_id = '{batch_id}'
                 """)
-                
-                # For partition_overwrite, log caveat
-                if config.write_mode == "partition_overwrite":
-                    self.logger.info(f"  Partition columns: {config.partition_columns}")
-                    self.logger.info(
-                        f"  Note: If this batch's partitions were overwritten by a later batch, "
-                        f"the filter will return incomplete data. Ensure batches are validated "
-                        f"before their partitions are overwritten."
-                    )
             
             else:
                 error_msg = f"Unsupported write_mode: {config.write_mode}"
@@ -386,13 +546,21 @@ class SourceTargetLoader:
             
             # Safety check: warn if no data found
             if target_count == 0:
-                self.logger.warning(
-                    f"No data found in target table for batch '{batch_id}'. "
-                    f"Possible causes: "
-                    f"1) Batch was overwritten (if overwrite/partition_overwrite mode), "
-                    f"2) Ingestion failed, "
-                    f"3) Filter mismatch"
-                )
+                if config.write_mode == "partition_overwrite":
+                    self.logger.error(
+                        f"No data found in target table for the source partition values! "
+                        f"Possible causes: "
+                        f"1) Source partition values don't exist in target (ingestion failed), "
+                        f"2) Partition columns mismatch between source and target"
+                    )
+                else:
+                    self.logger.warning(
+                        f"No data found in target table for batch '{batch_id}'. "
+                        f"Possible causes: "
+                        f"1) Batch was overwritten (if overwrite mode), "
+                        f"2) Ingestion failed, "
+                        f"3) Filter mismatch"
+                    )
             
             return df_filtered
             
@@ -413,6 +581,7 @@ class SourceTargetLoader:
         Verify target Delta has expected batch data
         
         For overwrite mode: Skip verification (entire table is the batch)
+        For partition_overwrite mode: Skip batch_id check (partitions may have different batch_ids)
         For other modes: Verify only expected batch exists
         
         Args:
@@ -429,8 +598,45 @@ class SourceTargetLoader:
             self.logger.info(f"  Overwrite mode: Skipping batch consistency check (entire table = batch)")
             return
         
+        # Skip batch_id verification for partition_overwrite mode
+        if config.write_mode == "partition_overwrite":
+            self.logger.info(
+                f"  Partition_overwrite mode: Skipping batch_id consistency check. "
+                f"Target is filtered by partition values, so it may contain rows from multiple batches "
+                f"(if partitions were overwritten). This is expected behavior."
+            )
+            
+            # Just verify we have data
+            try:
+                target_count = target_df.count()
+                if target_count == 0:
+                    error_msg = (
+                        f"Target has no data for the source partition values in {config.table_name}! "
+                        f"Ingestion may have failed or partition values don't match."
+                    )
+                    self.logger.error(error_msg)
+                    raise DataConsistencyError(error_msg)
+                
+                # Log which batch_ids are actually present (informational)
+                actual_batches = [row['_aud_batch_load_id'] for row in 
+                                target_df.select("_aud_batch_load_id").distinct().limit(10).collect()]
+                self.logger.info(f"  Target contains data from batch_id(s): {actual_batches}")
+                
+                if expected_batch not in actual_batches:
+                    self.logger.info(
+                        f"  Note: Source batch '{expected_batch}' not found in target batch_ids. "
+                        f"This means the partition was overwritten by a later batch: {actual_batches}. "
+                        f"This is normal for partition_overwrite mode."
+                    )
+            except DataConsistencyError:
+                raise
+            except Exception as e:
+                self.logger.warning(f"Could not verify target data (non-critical): {str(e)}")
+            
+            return
+        
+        # For append/merge modes: verify batch_id matches
         try:
-            # Verify target batch for append/merge/partition_overwrite
             target_batches = target_df.select("_aud_batch_load_id").distinct().collect()
             actual_batches = [row['_aud_batch_load_id'] for row in target_batches]
             

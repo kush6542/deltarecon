@@ -7,13 +7,17 @@
 # MAGIC **Features:**
 # MAGIC - Supports ORC, CSV, and Text file formats
 # MAGIC - Uses framework's file selection logic
+# MAGIC - **Detailed file reading information** - shows exactly which files are being read from source and target
+# MAGIC - **Framework-based target filtering** - uses write_mode logic (overwrite vs append/merge/partition_overwrite)
 # MAGIC - Works with production and test environments
 # MAGIC - Prints all files being read for transparency
+# MAGIC - Shows write_mode-specific behavior (e.g., "overwrite mode: reading entire table")
 # MAGIC 
 # MAGIC **How to use:**
 # MAGIC 1. Fill in the widgets at the top
 # MAGIC 2. Run all cells
 # MAGIC 3. Review each validation check output
+# MAGIC 4. Look for detailed logging sections marked with 📋 and ✓ symbols
 
 # COMMAND ----------
 
@@ -196,7 +200,18 @@ print("="*70)
 
 # COMMAND ----------
 
-print(f"Loading source data files (format: {ingestion_config.source_file_format})...")
+print("="*70)
+print("SOURCE DATA LOADING")
+print("="*70)
+print(f"File format: {ingestion_config.source_file_format}")
+print(f"Write mode: {ingestion_config.write_mode}")
+print(f"\nFiles to read ({len(source_file_paths)}):")
+for i, path in enumerate(source_file_paths, 1):
+    print(f"  [{i}] {path}")
+
+print("\n" + "-"*70)
+print("Loading source data files...")
+print("-"*70)
 
 try:
     file_format = ingestion_config.source_file_format.lower()
@@ -268,16 +283,18 @@ try:
     
     original_count = source_df.count()
     
-    print(f"\nOriginal data loaded successfully")
+    print(f"\n✓ Original data loaded successfully")
     print(f"  Rows: {original_count:,}")
     print(f"  Columns: {len(source_df.columns)}")
     
     # Extract partition columns from file path if they don't exist in data
     if partition_columns:
-        print(f"\n  Extracting partition columns: {partition_columns}")
+        print(f"\n" + "-"*70)
+        print(f"Extracting partition columns: {partition_columns}")
+        print("-"*70)
         for part_col in partition_columns:
             if part_col not in source_df.columns:
-                print(f"    Extracting partition column: {part_col}")
+                print(f"  → Extracting partition column: {part_col}")
                 # Extract from _metadata.file_path
                 pattern = f"{part_col}=([^/]+)"
                 source_df = source_df.withColumn(
@@ -289,20 +306,24 @@ try:
                 # Default to date for partition_date, string for others
                 if "date" in part_col.lower():
                     source_df = source_df.withColumn(part_col, col(part_col).cast("date"))
+                    print(f"    ✓ Cast to date type")
         
         # Verify partition extraction
         final_count = source_df.count()
         if final_count != original_count:
-            print(f"  WARNING: Partition extraction changed row count! Before: {original_count:,}, After: {final_count:,}")
+            print(f"\n⚠️  WARNING: Partition extraction changed row count! Before: {original_count:,}, After: {final_count:,}")
         else:
-            print(f"  Partition extraction verified: row count unchanged")
+            print(f"\n✓ Partition extraction verified: row count unchanged")
     
     source_df.cache()
     src_count = source_df.count()
     
-    print(f"\nFinal source data:")
-    print(f"  Rows: {src_count:,}")
-    print(f"  Columns: {len(source_df.columns)}")
+    print(f"\n" + "="*70)
+    print("SOURCE DATA LOADED")
+    print("="*70)
+    print(f"✓ Rows: {src_count:,}")
+    print(f"✓ Columns: {len(source_df.columns)}")
+    print("="*70)
     
 except Exception as e:
     print(f"ERROR loading source data: {str(e)}")
@@ -315,23 +336,127 @@ except Exception as e:
 
 # COMMAND ----------
 
-print("Loading target Delta table...")
+print("="*70)
+print("TARGET DATA LOADING")
+print("="*70)
+print(f"Target table: {TARGET_TABLE}")
+print(f"Write mode: {ingestion_config.write_mode}")
+print(f"Batch ID: {BATCH_LOAD_ID}")
 
 try:
-    # Read Delta table and filter by batch_load_id
-    target_df = spark.read.format("delta").table(TARGET_TABLE)
-    target_df = target_df.filter(col("_aud_batch_load_id") == BATCH_LOAD_ID)
+    # Use framework logic to determine filtering based on write mode
+    if ingestion_config.write_mode.lower() == "overwrite":
+        # OVERWRITE mode: Entire table is replaced each ingestion
+        # The current table IS the latest batch - no filtering needed
+        print("\n" + "-"*70)
+        print("OVERWRITE MODE DETECTED")
+        print("-"*70)
+        print("📋 Reading ENTIRE table (no batch filter)")
+        print("   Reason: In overwrite mode, entire table = current batch")
+        print("   Framework logic: Load all data without filtering")
+        print("-"*70)
+        
+        target_df = spark.sql(f"SELECT * FROM {TARGET_TABLE}")
+        
+        # Safety check: log actual batch IDs in table
+        actual_batches = [row['_aud_batch_load_id'] for row in 
+                        target_df.select("_aud_batch_load_id").distinct().limit(5).collect()]
+        print(f"\n✓ Actual batch_ids in table: {actual_batches}")
+        
+        if BATCH_LOAD_ID not in actual_batches:
+            print(f"\n⚠️  Note: Validating batch '{BATCH_LOAD_ID}' but table contains {actual_batches}")
+            print(f"   This is EXPECTED for overwrite mode - entire current table represents this batch")
+    
+    elif ingestion_config.write_mode.lower() in ["append", "merge", "partition_overwrite"]:
+        # APPEND/MERGE/PARTITION_OVERWRITE: Multiple batches coexist
+        # Filter by batch_id to isolate this batch's data
+        print("\n" + "-"*70)
+        print(f"{ingestion_config.write_mode.upper()} MODE DETECTED")
+        print("-"*70)
+        print(f"📋 Filtering by batch_id = '{BATCH_LOAD_ID}'")
+        print(f"   Reason: In {ingestion_config.write_mode} mode, multiple batches coexist")
+        print(f"   Framework logic: Use WHERE clause for data skipping")
+        print("-"*70)
+        
+        # Use SQL WHERE clause for predicate pushdown and data skipping
+        target_df = spark.sql(f"""
+            SELECT * FROM {TARGET_TABLE}
+            WHERE _aud_batch_load_id = '{BATCH_LOAD_ID}'
+        """)
+        
+        # For partition_overwrite, log additional info
+        if ingestion_config.write_mode.lower() == "partition_overwrite" and partition_columns:
+            print(f"\n✓ Partition columns: {partition_columns}")
+            print(f"⚠️  Note: If this batch's partitions were overwritten by a later batch,")
+            print(f"   the filter may return incomplete data.")
+    
+    else:
+        raise ValueError(f"Unsupported write_mode: {ingestion_config.write_mode}")
     
     target_df.cache()
     tgt_count = target_df.count()
     
-    print(f"\nTarget data loaded successfully")
-    print(f"  Rows: {tgt_count:,}")
-    print(f"  Columns: {len(target_df.columns)}")
+    print(f"\n" + "="*70)
+    print("TARGET DATA LOADED")
+    print("="*70)
+    print(f"✓ Rows: {tgt_count:,}")
+    print(f"✓ Columns: {len(target_df.columns)}")
+    
+    # Safety check: warn if no data found
+    if tgt_count == 0:
+        print(f"\n⚠️  WARNING: No data found in target table for batch '{BATCH_LOAD_ID}'")
+        print(f"   Possible causes:")
+        print(f"   1) Batch was overwritten (if overwrite/partition_overwrite mode)")
+        print(f"   2) Ingestion failed")
+        print(f"   3) Filter mismatch")
+    
+    print("="*70)
     
 except Exception as e:
     print(f"ERROR loading target data: {str(e)}")
     raise
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Data Loading Summary
+
+# COMMAND ----------
+
+print("\n" + "="*70)
+print("DATA LOADING SUMMARY")
+print("="*70)
+print(f"\n📊 SOURCE DATA:")
+print(f"   Format: {ingestion_config.source_file_format}")
+print(f"   Files read: {len(source_file_paths)}")
+print(f"   Total rows: {src_count:,}")
+print(f"   Total columns: {len(source_df.columns)}")
+if partition_columns:
+    print(f"   Partition columns extracted: {partition_columns}")
+
+print(f"\n📊 TARGET DATA:")
+print(f"   Table: {TARGET_TABLE}")
+print(f"   Write mode: {ingestion_config.write_mode}")
+if ingestion_config.write_mode.lower() == "overwrite":
+    print(f"   Filter applied: None (entire table loaded)")
+    print(f"   Reason: Overwrite mode - entire table = current batch")
+else:
+    print(f"   Filter applied: _aud_batch_load_id = '{BATCH_LOAD_ID}'")
+    print(f"   Reason: {ingestion_config.write_mode} mode - multiple batches coexist")
+print(f"   Total rows: {tgt_count:,}")
+print(f"   Total columns: {len(target_df.columns)}")
+
+print(f"\n📈 ROW COUNT COMPARISON:")
+print(f"   Source: {src_count:,}")
+print(f"   Target: {tgt_count:,}")
+if src_count == tgt_count:
+    print(f"   ✓ Match! (difference: 0)")
+else:
+    diff = abs(src_count - tgt_count)
+    pct = (diff / max(src_count, tgt_count)) * 100
+    print(f"   ⚠️  Mismatch! (difference: {diff:,}, {pct:.2f}%)")
+
+print("="*70)
 
 # COMMAND ----------
 

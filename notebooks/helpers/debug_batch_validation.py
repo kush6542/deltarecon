@@ -49,10 +49,10 @@ print("Setup complete - Framework modules imported")
 # Create widgets
 dbutils.widgets.removeAll()
 
-dbutils.widgets.text("ingestion_ops_schema", "ts42_demo.migration_operations", "1. Ingestion Ops Schema (catalog.schema)")
-dbutils.widgets.text("validation_schema", "cat_ril_nayeem_03.validation_v2", "2. Validation Schema (catalog.schema)")
-dbutils.widgets.text("target_table", "ts42_demo.test_validation.customers", "3. Target Table")
-dbutils.widgets.text("batch_load_id", "BATCH_20251102_000001", "4. Batch Load ID")
+dbutils.widgets.text("ingestion_ops_schema", "jio_home_prod.operations", "1. Ingestion Ops Schema (catalog.schema)")
+dbutils.widgets.text("validation_schema", "jio_home_prod.operations", "2. Validation Schema (catalog.schema)")
+dbutils.widgets.text("target_table", "", "3. Target Table")
+dbutils.widgets.text("batch_load_id", "", "4. Batch Load ID")
 dbutils.widgets.dropdown("run_reconciliation", "N", ["Y", "N"], "5. Run Data Reconciliation?")
 
 # Get values

@@ -2,6 +2,48 @@
 
 This directory contains utility notebooks for debugging and manual validation.
 
+## debug_schema_only_validation.py
+
+**Purpose:** ⚡ **FAST** schema-only validation - reads only 10 rows from source and target!
+
+**Key Features:**
+- **Ultra-fast** - completes in seconds, not minutes
+- Only reads 10 sample rows from source and target
+- Schema validation only (column names and data types)
+- Perfect for quick debugging and iterative development
+- No expensive full table scans
+
+**What this checks:**
+- ✅ Column names match
+- ✅ Data types match
+- ✅ Configuration is valid
+
+**What this DOES NOT check:**
+- ❌ Row count (requires full scan)
+- ❌ PK duplicates (requires full scan)  
+- ❌ Data reconciliation (requires full scan)
+
+**When to use:**
+- You want to quickly verify schema compatibility
+- You're debugging schema mismatches
+- You're iterating on table structure/configuration
+- You don't need full data validation yet
+- You want fast feedback during development
+
+**For full validation, use:** `debug_batch_validation.py` notebook
+
+**Example:**
+```
+Ingestion Ops Schema: jio_home_prod.operations
+Validation Schema: jio_home_prod.operations
+Target Table: catalog.schema.table_name
+Batch Load ID: 202511121234
+```
+
+Completes in ~5-10 seconds vs several minutes for full validation!
+
+---
+
 ## debug_batch_validation.py
 
 **Purpose:** Debug validation failures for a specific table and batch using simple, transparent code.

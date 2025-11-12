@@ -9,6 +9,9 @@ Logic:
 - Skip batches that are already validated successfully
 - Supports batch-level auditing: returns batch-to-path mapping
 
+IMPORTANT: Only validates incremental loads (operation_type = 'incremental_batch_ingestion').
+           Historical loads (hex MD5 batch IDs) are excluded from validation.
+
 Note: Loaded via %run - constants, TableConfig, exceptions, logger available in namespace
 """
 
@@ -256,9 +259,11 @@ class BatchProcessor:
         self.logger.info(
             f"Building latest batch mapping for partitions: {config.partition_columns}"
         )
+        self.logger.info("Filtering incremental batches only (operation_type = 'incremental_batch_ingestion')")
         
         try:
             # Query all completed batches with their file paths
+            # Filter by operation_type to exclude historical loads (hex MD5 batch IDs)
             query = f"""
                 SELECT 
                     t2.batch_load_id,
@@ -269,6 +274,7 @@ class BatchProcessor:
                     AND t1.batch_load_id = t2.batch_load_id
                 WHERE t2.status = 'COMPLETED'
                     AND t1.table_name = '{config.table_name}'
+                    AND t2.operation_type = 'incremental_batch_ingestion'
                 ORDER BY t2.batch_load_id DESC
             """
             
@@ -406,9 +412,11 @@ class BatchProcessor:
         self.logger.set_table_context(config.table_name)
         self.logger.info(f"Identifying unprocessed batches with path mapping")
         self.logger.info(f"  Write mode: {config.write_mode}")
+        self.logger.info("  Filtering incremental batches only (operation_type = 'incremental_batch_ingestion')")
         
         try:
             # Query to get ALL unprocessed batches (initial selection)
+            # Filter by operation_type to exclude historical loads (hex MD5 batch IDs)
             query = f"""
                 SELECT
                     t1.source_file_path,
@@ -430,6 +438,7 @@ class BatchProcessor:
                     ON t3.batch_load_id = t2.batch_load_id AND t3.rnk = 1
                 WHERE t2.status = 'COMPLETED'
                     AND t1.table_name = '{config.table_name}'
+                    AND t2.operation_type = 'incremental_batch_ingestion'
                     AND (
                         -- For overwrite mode: only latest batch
                         (t4.write_mode = 'overwrite' AND t2.batch_load_id = (
@@ -437,6 +446,7 @@ class BatchProcessor:
                             FROM {constants.INGESTION_AUDIT_TABLE}
                             WHERE status = 'COMPLETED'
                                 AND target_table_name = '{config.table_name}'
+                                AND operation_type = 'incremental_batch_ingestion'
                         ))
                         -- For append/partition_overwrite/merge modes: all batches
                         OR t4.write_mode IN ('append', 'partition_overwrite', 'merge')

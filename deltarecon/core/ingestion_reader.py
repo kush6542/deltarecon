@@ -101,6 +101,11 @@ class IngestionConfigReader:
         """
         Convert SQL row to TableConfig object
         
+        PARTITION COLUMN PRIORITIZATION (mirrors ingestion framework):
+        1. First, try to get partitions from source_table_partition_mapping (authoritative)
+        2. If not found, fall back to serving_ingestion_config.partition_column
+        3. If mismatch detected, log warning and use source_table_partition_mapping
+        
         Args:
             row: Row from validation_mapping + ingestion_config query
         
@@ -112,10 +117,10 @@ class IngestionConfigReader:
         if row.tgt_primary_keys:
             primary_keys = [pk.strip() for pk in row.tgt_primary_keys.split('|') if pk.strip()]
         
-        # Parse partition columns (comma-separated)
-        partition_columns = []
+        # Parse partition columns from config (for fallback)
+        config_partition_columns = []
         if row.partition_column:
-            partition_columns = [pc.strip() for pc in row.partition_column.split(',') if pc.strip()]
+            config_partition_columns = [pc.strip() for pc in row.partition_column.split(',') if pc.strip()]
         
         # Parse exclude fields
         exclude_fields = []
@@ -143,13 +148,76 @@ class IngestionConfigReader:
                 )
                 source_file_options = {}
         
-        # Get partition datatypes if partitions exist
-        partition_datatypes = {}
-        if partition_columns:
-            partition_datatypes = self._get_partition_datatypes(
-                row.src_table, 
-                partition_columns
+        # ============================================================================
+        # PARTITION COLUMN RESOLUTION (NEW LOGIC - mirrors ingestion framework)
+        # ============================================================================
+        
+        # Step 1: Try to get partition columns from source_table_partition_mapping (authoritative)
+        actual_partition_columns, partition_datatypes = self._get_partition_columns_and_datatypes(
+            row.src_table
+        )
+        
+        # Step 2: Decide which partition columns to use
+        if actual_partition_columns:
+            # Mapping has data → use it (prioritize mapping over config)
+            partition_columns = actual_partition_columns
+            
+            # Check for mismatch with config
+            if config_partition_columns:
+                if set(actual_partition_columns) != set(config_partition_columns):
+                    missing_in_config = set(actual_partition_columns) - set(config_partition_columns)
+                    extra_in_config = set(config_partition_columns) - set(actual_partition_columns)
+                    
+                    self.logger.warning(
+                        f"PARTITION CONFIGURATION MISMATCH for {row.tgt_table}!"
+                    )
+                    self.logger.warning(f"   Config (serving_ingestion_config): {config_partition_columns}")
+                    self.logger.warning(f"   Actual (source_table_partition_mapping): {actual_partition_columns}")
+                    if missing_in_config:
+                        self.logger.warning(f" Missing in config: {list(missing_in_config)}")
+                    if extra_in_config:
+                        self.logger.warning(f" Extra in config: {list(extra_in_config)}")
+                    self.logger.warning(
+                        f" Using actual partitions from source_table_partition_mapping."
+                    )
+                    self.logger.warning(
+                        f" Recommendation: Update serving_ingestion_config.partition_column "
+                        f"to match: {','.join(actual_partition_columns)}"
+                    )
+            else:
+                # Config had no partitions, but mapping does
+                self.logger.info(
+                    f"✓ No partitions in config, but found in source_table_partition_mapping: "
+                    f"{actual_partition_columns}"
+                )
+        else:
+            # Mapping empty → fallback to config (same behavior as ingestion framework)
+            partition_columns = config_partition_columns
+            
+            if partition_columns:
+                self.logger.info(
+                    f"Using partition columns from serving_ingestion_config for {row.tgt_table}: "
+                    f"{partition_columns} (not found in source_table_partition_mapping)"
+                )
+                # Get datatypes separately using old method
+                partition_datatypes = self._get_partition_datatypes(
+                    row.src_table, 
+                    partition_columns
+                )
+            else:
+                # No partitions in either config or mapping
+                self.logger.debug(f"No partition columns configured for {row.tgt_table}")
+                partition_datatypes = {}
+        
+        # Step 3: Validate for partition_overwrite mode
+        if row.write_mode == "partition_overwrite" and not partition_columns:
+            error_msg = (
+                f"partition_overwrite mode requires partition_columns for {row.tgt_table}. "
+                f"Not found in source_table_partition_mapping OR serving_ingestion_config.partition_column. "
+                f"Either add partition columns to configuration or change write_mode."
             )
+            self.logger.error(error_msg)
+            raise ConfigurationError(error_msg)
         
         return TableConfig(
             table_group=row.table_group,
@@ -213,4 +281,99 @@ class IngestionConfigReader:
                 f"Using 'string' as default for all partitions."
             )
             return {col: 'string' for col in partition_columns}
+    
+    def _get_partition_columns_and_datatypes(self, source_table: str) -> tuple:
+        """
+        Get partition columns AND datatypes from source_table_partition_mapping
+        
+        Mirrors ingestion framework behavior: automigrate/common/config.py::get_partition_col_datatypes()
+        
+        This method queries the source_table_partition_mapping table (Hive metadata) to get
+        the authoritative list of partition columns and their datatypes.
+        
+        Args:
+            source_table: Source table name (e.g., 'connectivity_home.table_name')
+        
+        Returns:
+            Tuple of (partition_columns_list, partition_datatypes_dict)
+            - partition_columns_list: List of partition column names in index order
+            - partition_datatypes_dict: Dict mapping column name to datatype
+            
+            Returns ([], {}) if:
+            - Table not found in mapping
+            - Query returns no rows
+            - Query fails (graceful fallback)
+        
+        Examples:
+            >>> _get_partition_columns_and_datatypes('connectivity_home.my_table')
+            (['partition_date', 'd_customer_product_type'], 
+             {'partition_date': 'date', 'd_customer_product_type': 'string'})
+            
+            >>> _get_partition_columns_and_datatypes('schema.table_not_in_mapping')
+            ([], {})
+        """
+        try:
+            # Parse source table name
+            clean_table = source_table.replace('source_system.', '')
+            parts = clean_table.split('.')
+            
+            if len(parts) != 2:
+                self.logger.warning(
+                    f"Unexpected source table format: {source_table}. "
+                    f"Expected 'schema.table', got {len(parts)} parts."
+                )
+                return [], {}
+            
+            schema_name, table_name = parts
+            
+            # Query source_table_partition_mapping (same as ingestion framework)
+            query = f"""
+                SELECT DISTINCT 
+                    partition_column_name, 
+                    derived_datatype,
+                    index
+                FROM {constants.INGESTION_SRC_TABLE_PARTITION_MAPPING}
+                WHERE LOWER(TRIM(schema_name)) = LOWER(TRIM('{schema_name}'))
+                  AND LOWER(TRIM(table_name)) = LOWER(TRIM('{table_name}'))
+                ORDER BY index ASC
+            """
+            
+            self.logger.debug(f"Querying source_table_partition_mapping for: {schema_name}.{table_name}")
+            
+            result_df = self.spark.sql(query)
+            rows = result_df.collect()
+            
+            if not rows:
+                # Empty result - table not in mapping (this is OK, not an error)
+                self.logger.debug(
+                    f"No partition data found in source_table_partition_mapping for {source_table}. "
+                    f"Will use partition_column from serving_ingestion_config."
+                )
+                return [], {}
+            
+            # Build both list and dict (maintains order via index column)
+            partition_columns = []
+            partition_datatypes = {}
+            
+            for row in rows:
+                col_name = row.partition_column_name
+                datatype = row.derived_datatype
+                partition_columns.append(col_name)
+                partition_datatypes[col_name] = datatype
+            
+            self.logger.info(
+                f"✓ Loaded {len(partition_columns)} partition columns from source_table_partition_mapping "
+                f"for {source_table}: {partition_columns}"
+            )
+            
+            return partition_columns, partition_datatypes
+            
+        except Exception as e:
+            # Query error - log and fall back gracefully (same as ingestion framework)
+            self.logger.error(
+                f"ERROR querying source_table_partition_mapping for {source_table}: {str(e)}. "
+                f"Will fallback to serving_ingestion_config.partition_column"
+            )
+            self.logger.debug("Exception details:", exc_info=True)
+            return [], {}
 

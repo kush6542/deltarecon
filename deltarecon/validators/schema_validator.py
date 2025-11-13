@@ -5,12 +5,19 @@ Compares:
 - Column names (missing, extra)
 - Data types for common columns
 - Excludes _aud_* columns from target
+- Uses DESCRIBE EXTENDED for target schema to bypass masking functions
 
 Note: Loaded via %run - BaseValidator, TableConfig, ValidatorResult, logger available in namespace
 """
 
 from pyspark.sql import DataFrame
+from pyspark.sql.types import (
+    StringType, IntegerType, LongType, DoubleType, FloatType, 
+    BooleanType, DateType, TimestampType, DecimalType, BinaryType, 
+    ShortType, ByteType, DataType, StructField, StructType
+)
 from typing import Set, Dict
+import re
 
 from deltarecon.validators.base_validator import BaseValidator
 from deltarecon.models.table_config import TableConfig
@@ -27,11 +34,120 @@ class SchemaValidator(BaseValidator):
     - Column names match
     - Data types match for common columns
     - Reports missing/extra columns
+    
+    Note: Uses DESCRIBE EXTENDED to get original target table schema,
+    bypassing masking function signatures that change apparent data types.
     """
     
     @property
     def name(self) -> str:
         return "schema"
+    
+    def _parse_datatype_string(self, dtype_str: str) -> DataType:
+        """
+        Parse a string datatype (from DESCRIBE EXTENDED) into PySpark DataType
+        
+        Args:
+            dtype_str: String representation of datatype (e.g., 'int', 'bigint', 'string')
+        
+        Returns:
+            Corresponding PySpark DataType object
+        """
+        dtype_lower = dtype_str.lower().strip()
+        
+        # Handle decimal types with precision/scale
+        decimal_match = re.match(r'decimal\((\d+),\s*(\d+)\)', dtype_lower)
+        if decimal_match:
+            precision = int(decimal_match.group(1))
+            scale = int(decimal_match.group(2))
+            return DecimalType(precision, scale)
+        
+        # Map common types
+        type_mapping = {
+            'string': StringType(),
+            'int': IntegerType(),
+            'integer': IntegerType(),
+            'bigint': LongType(),
+            'long': LongType(),
+            'double': DoubleType(),
+            'float': FloatType(),
+            'boolean': BooleanType(),
+            'bool': BooleanType(),
+            'date': DateType(),
+            'timestamp': TimestampType(),
+            'binary': BinaryType(),
+            'short': ShortType(),
+            'smallint': ShortType(),
+            'byte': ByteType(),
+            'tinyint': ByteType(),
+        }
+        
+        return type_mapping.get(dtype_lower, StringType())
+    
+    def _get_original_target_schema(self, table_name: str, target_df: DataFrame) -> Dict[str, DataType]:
+        """
+        Get target table's original schema using DESCRIBE EXTENDED
+        
+        This bypasses masking function signatures and returns actual column types
+        as defined in the table metadata.
+        
+        Args:
+            table_name: Fully qualified table name
+            target_df: Target DataFrame (used as fallback)
+        
+        Returns:
+            Dictionary mapping column names to PySpark DataType objects
+        """
+        try:
+            logger.info(f"Fetching original schema for '{table_name}' using DESCRIBE EXTENDED")
+            
+            # Get SparkSession from DataFrame
+            spark = target_df.sparkSession
+            
+            # Run DESCRIBE EXTENDED
+            describe_df = spark.sql(f"DESCRIBE EXTENDED {table_name}")
+            
+            # Collect results
+            rows = describe_df.collect()
+            
+            schema_dict = {}
+            in_partition_section = False
+            
+            for row in rows:
+                col_name = row['col_name'].strip() if row['col_name'] else ""
+                data_type = row['data_type'].strip() if row['data_type'] else ""
+                
+                # Stop when we hit the partition information section
+                if col_name.startswith('#') or col_name == '':
+                    in_partition_section = True
+                    continue
+                
+                # Skip partition columns section
+                if in_partition_section:
+                    continue
+                
+                # Skip audit columns
+                if col_name.startswith('_aud_'):
+                    continue
+                
+                # Only process regular data columns
+                if data_type and data_type != '':
+                    parsed_type = self._parse_datatype_string(data_type)
+                    schema_dict[col_name] = parsed_type
+            
+            logger.info(f"Extracted {len(schema_dict)} columns from DESCRIBE EXTENDED")
+            return schema_dict
+            
+        except Exception as e:
+            logger.warning(f"Failed to get original schema via DESCRIBE EXTENDED: {e}")
+            logger.warning("Falling back to DataFrame schema (may show masked types)")
+            
+            # Fallback to DataFrame schema
+            return {
+                f.name: f.dataType 
+                for f in target_df.schema.fields 
+                if not f.name.startswith('_aud_')
+            }
     
     def validate(
         self, 
@@ -41,6 +157,9 @@ class SchemaValidator(BaseValidator):
     ) -> ValidatorResult:
         """
         Validate schema with strict type checking
+        
+        Uses DESCRIBE EXTENDED to get target schema, bypassing masking functions
+        that change apparent data types.
         
         Returns:
             ValidatorResult with schema comparison details
@@ -59,11 +178,14 @@ class SchemaValidator(BaseValidator):
             if f.name not in partition_cols_to_exclude  # Exclude extracted partition columns
         }
         
+        # Get original target schema using DESCRIBE EXTENDED (bypasses masking functions)
+        target_schema_all = self._get_original_target_schema(config.table_name, target_df)
+        
+        # Exclude partition columns from target schema
         target_schema = {
-            f.name: f.dataType 
-            for f in target_df.schema.fields 
-            if not f.name.startswith('_aud_')  # Exclude audit columns
-            and f.name not in partition_cols_to_exclude  # Also exclude partition columns
+            col: dtype
+            for col, dtype in target_schema_all.items()
+            if col not in partition_cols_to_exclude
         }
         
         logger.info(f"Source columns: {len(source_schema)} (excluding {len(partition_cols_to_exclude)} partition columns)")

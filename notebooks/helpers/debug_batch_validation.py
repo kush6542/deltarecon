@@ -35,9 +35,16 @@ import json
 # Import framework modules for file selection and loading
 from deltarecon.core.batch_processor import BatchProcessor
 from deltarecon.core.source_target_loader import SourceTargetLoader
+from deltarecon.core.ingestion_reader import IngestionConfigReader
 from deltarecon.models.table_config import TableConfig
+from deltarecon.validators.schema_validator import SchemaValidator
 
 print("Setup complete - Framework modules imported")
+print("  ✓ BatchProcessor")
+print("  ✓ SourceTargetLoader")
+print("  ✓ IngestionConfigReader (with partition mapping prioritization)")
+print("  ✓ SchemaValidator (with DESCRIBE EXTENDED support)")
+print("  ✓ TableConfig")
 
 # COMMAND ----------
 
@@ -85,77 +92,65 @@ print("="*70)
 
 # COMMAND ----------
 
-print("Fetching configuration from metadata tables...")
+print("📋 Fetching configuration using FRAMEWORK (IngestionConfigReader)...")
+print("   This will automatically prioritize source_table_partition_mapping over config!")
 
-# Query serving_ingestion_config table
-ingestion_query = f"""
-    SELECT 
-        target_catalog,
-        target_schema,
-        target_table,
-        source_file_path,
-        source_file_format,
-        source_file_options,
-        write_mode,
-        partition_column
-    FROM {INGESTION_CONFIG_TABLE}
-    WHERE concat_ws('.', target_catalog, target_schema, target_table) = '{TARGET_TABLE}'
-"""
+# Use framework's IngestionConfigReader to get TableConfig
+# This automatically handles partition mapping prioritization
+config_reader = IngestionConfigReader(spark)
 
-ingestion_config = spark.sql(ingestion_query).collect()
-
-if not ingestion_config:
-    raise ValueError(f"Table '{TARGET_TABLE}' not found in {INGESTION_CONFIG_TABLE}")
-
-ingestion_config = ingestion_config[0]
-
-# Query validation_mapping table
+print(f"\n🔍 Step 1: Query validation_mapping for table: {TARGET_TABLE}")
+# Create a filter to get just this table
 validation_query = f"""
-    SELECT 
-        tgt_primary_keys,
-        mismatch_exclude_fields
+    SELECT *
     FROM {VALIDATION_MAPPING_TABLE}
     WHERE tgt_table = '{TARGET_TABLE}'
+    AND is_active = TRUE
 """
 
-validation_config = spark.sql(validation_query).collect()
+mapping_rows = spark.sql(validation_query).collect()
 
-if not validation_config:
-    print("WARNING: Table not found in validation_mapping, using defaults")
-    primary_keys = []
-    exclude_fields = []
-else:
-    validation_config = validation_config[0]
-    # Parse primary keys (pipe-separated)
-    primary_keys = [pk.strip() for pk in validation_config.tgt_primary_keys.split('|')] if validation_config.tgt_primary_keys else []
-    # Parse exclude fields (comma-separated)
-    exclude_fields = [f.strip() for f in validation_config.mismatch_exclude_fields.split(',') if validation_config.mismatch_exclude_fields] if validation_config.mismatch_exclude_fields else []
+if not mapping_rows:
+    raise ValueError(f"Table '{TARGET_TABLE}' not found in {VALIDATION_MAPPING_TABLE} or is_active=FALSE")
 
-# Parse partition columns (comma-separated)
-partition_columns = [pc.strip() for pc in ingestion_config.partition_column.split(',')] if ingestion_config.partition_column else []
+print(f"   ✓ Found validation mapping for {TARGET_TABLE}")
 
-# Parse source file options (JSON string to dict)
-source_file_options = {}
-if ingestion_config.source_file_options:
-    try:
-        source_file_options = json.loads(ingestion_config.source_file_options)
-    except json.JSONDecodeError as e:
-        print(f"WARNING: Failed to parse source_file_options: {e}. Will use empty options.")
-        source_file_options = {}
+# Use framework's _row_to_table_config method to build TableConfig
+# This includes partition mapping prioritization logic!
+print(f"\n🔍 Step 2: Build TableConfig using framework logic")
+print(f"   Framework will:")
+print(f"   • Query serving_ingestion_config for table details")
+print(f"   • Query source_table_partition_mapping for authoritative partitions")
+print(f"   • Prioritize mapping table over config (if available)")
+print(f"   • Fallback to config if mapping is empty")
 
-print("\nConfiguration loaded successfully")
-print("\n" + "="*70)
-print("TABLE CONFIGURATION")
+table_config = config_reader._row_to_table_config(mapping_rows[0])
+
+print(f"\n✅ TableConfig built successfully!")
+print(f"\n{'='*70}")
+print("TABLE CONFIGURATION (from framework)")
 print("="*70)
-print(f"Target Table: {TARGET_TABLE}")
-print(f"Source File Path: {ingestion_config.source_file_path}")
-print(f"Write Mode: {ingestion_config.write_mode}")
-print(f"File Format: {ingestion_config.source_file_format}")
-print(f"File Options: {source_file_options}")
-print(f"Primary Keys: {primary_keys}")
-print(f"Partition Columns: {partition_columns}")
-print(f"Exclude Fields: {exclude_fields}")
+print(f"Target Table: {table_config.table_name}")
+print(f"Source Table: {table_config.source_table}")
+print(f"Source File Path: {table_config.source_file_path}")
+print(f"Write Mode: {table_config.write_mode}")
+print(f"File Format: {table_config.source_file_format}")
+print(f"File Options: {table_config.source_file_options}")
+print(f"Primary Keys: {table_config.primary_keys}")
+print(f"Partition Columns: {table_config.partition_columns}")
+if table_config.partition_datatypes:
+    print(f"Partition Datatypes: {table_config.partition_datatypes}")
+print(f"Exclude Fields: {table_config.exclude_columns}")
+print(f"Is Partitioned: {table_config.is_partitioned}")
 print("="*70)
+
+# Extract for convenience (to use in rest of notebook)
+TARGET_TABLE = table_config.table_name
+primary_keys = table_config.primary_keys or []
+partition_columns = table_config.partition_columns or []
+partition_datatypes = table_config.partition_datatypes or {}
+exclude_fields = table_config.exclude_columns or []
+source_file_options = table_config.source_file_options or {}
 
 # COMMAND ----------
 
@@ -171,27 +166,31 @@ print(f"\n1️⃣  IDENTIFY SOURCE FILES:")
 print(f"   - Query ingestion_metadata table for batch '{BATCH_LOAD_ID}'")
 print(f"   - Extract source file paths that were ingested")
 
-print(f"\n2️⃣  LOAD SOURCE DATA:")
-print(f"   - Format: {ingestion_config.source_file_format}")
+print(f"\n2️⃣  LOAD SOURCE DATA (manual - for debugging):")
+print(f"   - Format: {table_config.source_file_format}")
 if partition_columns:
     print(f"   - Extract partition columns from file paths: {partition_columns}")
+    if partition_datatypes:
+        print(f"   - Partition datatypes (from mapping table): {partition_datatypes}")
 print(f"   - Apply file options: {source_file_options if source_file_options else 'None'}")
 
-print(f"\n3️⃣  LOAD TARGET DATA:")
+print(f"\n3️⃣  LOAD TARGET DATA (using FRAMEWORK SourceTargetLoader):")
 print(f"   - Table: {TARGET_TABLE}")
-print(f"   - Write mode: {ingestion_config.write_mode}")
+print(f"   - Write mode: {table_config.write_mode}")
+print(f"   - Framework class: SourceTargetLoader")
 
-if ingestion_config.write_mode.lower() == "overwrite":
+if table_config.write_mode.lower() == "overwrite":
     print(f"   - Strategy: Load ENTIRE table (no filtering)")
     print(f"   - Reason: Overwrite mode = entire table is the current batch")
-elif ingestion_config.write_mode.lower() == "partition_overwrite":
-    print(f"   - Strategy: Filter by PARTITION VALUES from source")
+elif table_config.write_mode.lower() == "partition_overwrite":
+    print(f"   - Strategy: Filter by PARTITION VALUES + batch_id")
     print(f"   - Partitions: {partition_columns}")
     print(f"   - Reason: partition_overwrite overwrites old batch_ids")
-    print(f"   - Note: Uses Option A logic - validates latest state per partition")
-elif ingestion_config.write_mode.lower() in ["append", "merge"]:
+    print(f"   - Framework logic: Extracts values from source, filters target by partitions + batch_id")
+    print(f"   - Note: This PREVENTS comparing against historical/stale data!")
+elif table_config.write_mode.lower() in ["append", "merge"]:
     print(f"   - Strategy: Filter by _aud_batch_load_id = '{BATCH_LOAD_ID}'")
-    print(f"   - Reason: {ingestion_config.write_mode} mode preserves all batch_ids")
+    print(f"   - Reason: {table_config.write_mode} mode preserves all batch_ids")
 
 print(f"\n4️⃣  RUN VALIDATION CHECKS:")
 print(f"   - Row Count: Compare source vs target row counts")
@@ -214,7 +213,7 @@ print("\n" + "="*70)
 print("STEP 1: LOCATE SOURCE FILES")
 print("="*70)
 print("Querying ingestion_metadata table for batch files...")
-print(f"File format: {ingestion_config.source_file_format}")
+print(f"File format: {table_config.source_file_format}")
 
 # Query the ingestion_metadata table to find files for this batch
 # This matches how the framework (batch_processor) identifies files
@@ -255,8 +254,8 @@ print("\n" + "="*70)
 print("STEP 2: SOURCE DATA LOADING")
 print("="*70)
 print(f"📋 Configuration:")
-print(f"   File format: {ingestion_config.source_file_format}")
-print(f"   Write mode: {ingestion_config.write_mode}")
+print(f"   File format: {table_config.source_file_format}")
+print(f"   Write mode: {table_config.write_mode}")
 print(f"   Batch ID: {BATCH_LOAD_ID}")
 if partition_columns:
     print(f"   Partition columns: {partition_columns}")
@@ -272,7 +271,7 @@ print("⏳ Loading source data files...")
 print("-"*70)
 
 try:
-    file_format = ingestion_config.source_file_format.lower()
+    file_format = table_config.source_file_format.lower()
     
     # Load based on format
     if file_format == "orc":
@@ -379,6 +378,10 @@ try:
     if partition_columns:
         print(f"\n" + "-"*70)
         print(f"Extracting partition columns: {partition_columns}")
+        if partition_datatypes:
+            print(f"Using datatypes from source_table_partition_mapping:")
+            for col_name, dtype in partition_datatypes.items():
+                print(f"  • {col_name}: {dtype}")
         print("-"*70)
         for part_col in partition_columns:
             if part_col not in source_df.columns:
@@ -390,11 +393,16 @@ try:
                     regexp_extract(col("_metadata.file_path"), pattern, 1)
                 )
                 
-                # Try to cast to appropriate type (date, int, etc.)
-                # Default to date for partition_date, string for others
-                if "date" in part_col.lower():
+                # Cast to datatype from mapping table (or fallback logic)
+                target_dtype = partition_datatypes.get(part_col, 'string') if partition_datatypes else 'string'
+                
+                if target_dtype and target_dtype.lower() != 'string':
+                    source_df = source_df.withColumn(part_col, col(part_col).cast(target_dtype))
+                    print(f"    ✓ Cast to {target_dtype} (from mapping table)")
+                elif "date" in part_col.lower():
+                    # Fallback for date columns if no mapping
                     source_df = source_df.withColumn(part_col, col(part_col).cast("date"))
-                    print(f"    ✓ Cast to date type")
+                    print(f"    ✓ Cast to date type (fallback logic)")
         
         # Verify partition extraction
         final_count = source_df.count()
@@ -425,29 +433,39 @@ except Exception as e:
 # COMMAND ----------
 
 print("\n" + "="*70)
-print("STEP 3: TARGET DATA LOADING")
+print("STEP 3: TARGET DATA LOADING (using FRAMEWORK)")
 print("="*70)
 print(f"📋 Configuration:")
 print(f"   Target table: {TARGET_TABLE}")
-print(f"   Write mode: {ingestion_config.write_mode}")
+print(f"   Write mode: {table_config.write_mode}")
 print(f"   Batch ID: {BATCH_LOAD_ID}")
+print(f"   Framework class: SourceTargetLoader")
+
+print(f"\n🔧 Using framework's _load_target_delta() method")
+print(f"   This method includes ALL framework improvements:")
+print(f"   ✓ Partition overwrite batch filtering")
+print(f"   ✓ Batch verification")
+print(f"   ✓ Historical data exclusion")
 
 try:
-    # Use framework logic to determine filtering based on write mode
-    if ingestion_config.write_mode.lower() == "overwrite":
+    # Initialize framework's SourceTargetLoader
+    loader = SourceTargetLoader(spark)
+    
+    print(f"\n📊 Framework will determine filtering strategy based on write_mode...")
+    
+    if table_config.write_mode.lower() == "overwrite":
         # OVERWRITE mode: Entire table is replaced each ingestion
-        # The current table IS the latest batch - no filtering needed
         print("\n" + "-"*70)
         print("OVERWRITE MODE DETECTED")
         print("-"*70)
-        print("📋 Reading ENTIRE table (no batch filter)")
+        print("📋 Framework strategy: Load ENTIRE table (no filtering)")
         print("   Reason: In overwrite mode, entire table = current batch")
-        print("   Framework logic: Load all data without filtering")
         print("-"*70)
         
-        target_df = spark.sql(f"SELECT * FROM {TARGET_TABLE}")
+        # Use framework method
+        target_df = loader._load_target_delta(table_config, BATCH_LOAD_ID, source_df=source_df)
         
-        # Safety check: log actual batch IDs in table
+        # Verbose debug output
         actual_batches = [row['_aud_batch_load_id'] for row in 
                         target_df.select("_aud_batch_load_id").distinct().limit(5).collect()]
         print(f"\n✓ Actual batch_ids in table: {actual_batches}")
@@ -456,21 +474,22 @@ try:
             print(f"\n⚠️  Note: Validating batch '{BATCH_LOAD_ID}' but table contains {actual_batches}")
             print(f"   This is EXPECTED for overwrite mode - entire current table represents this batch")
     
-    elif ingestion_config.write_mode.lower() == "partition_overwrite":
-        # PARTITION_OVERWRITE: Uses partition-based filtering (not batch_id)
+    elif table_config.write_mode.lower() == "partition_overwrite":
+        # PARTITION_OVERWRITE: Uses partition-based filtering + batch_id
         print("\n" + "-"*70)
         print("PARTITION_OVERWRITE MODE DETECTED")
         print("-"*70)
-        print("📋 Target Loading Strategy: Filter by PARTITION VALUES from source")
+        print("📋 Framework strategy: Filter by PARTITION VALUES + batch_id")
         print("   Reason: In partition_overwrite mode, old batch_ids are overwritten")
-        print("   Framework logic: Extract partition values from source, then filter target")
+        print("   Framework logic: Extract partition values from source, filter target by partitions + batch_id")
+        print("   This PREVENTS comparing against historical/stale data!")
         print("-"*70)
         
         if not partition_columns:
             raise ValueError("partition_overwrite mode requires partition_columns to be configured")
         
-        # Extract partition values from source (matching framework logic)
-        print(f"\n🔍 Step 1: Extract partition values from SOURCE data")
+        # Show partition values extracted from source (verbose debug)
+        print(f"\n🔍 DEBUG: Partition values in SOURCE data:")
         print(f"   Partition columns: {partition_columns}")
         
         partition_values = {}
@@ -482,67 +501,37 @@ try:
             partition_values[part_col] = distinct_vals
             
             print(f"   • {part_col}: {len(distinct_vals)} distinct value(s)")
-            # Show first 10 values
-            for val in distinct_vals[:10]:
+            # Show first 5 values for debug
+            for val in distinct_vals[:5]:
                 print(f"      - {val}")
-            if len(distinct_vals) > 10:
-                print(f"      ... and {len(distinct_vals) - 10} more")
+            if len(distinct_vals) > 5:
+                print(f"      ... and {len(distinct_vals) - 5} more")
         
-        # Build WHERE clause (matching framework logic)
-        print(f"\n🔧 Step 2: Build SQL WHERE clause for target filtering")
-        where_conditions = []
-        for part_col, values in partition_values.items():
-            if len(values) == 1:
-                val = values[0]
-                if isinstance(val, str):
-                    where_conditions.append(f"{part_col} = '{val}'")
-                else:
-                    where_conditions.append(f"{part_col} = {val}")
-                print(f"   • {part_col} = {val}")
-            else:
-                # Multiple values - use IN clause
-                if isinstance(values[0], str):
-                    val_list = ", ".join([f"'{v}'" for v in values])
-                else:
-                    val_list = ", ".join([str(v) for v in values])
-                where_conditions.append(f"{part_col} IN ({val_list})")
-                print(f"   • {part_col} IN ({len(values)} values)")
+        print(f"\n🔧 Framework will now:")
+        print(f"   1. Extract partition values from source (shown above)")
+        print(f"   2. Build SQL WHERE clause: (partitions) AND (_aud_batch_load_id = '{BATCH_LOAD_ID}')")
+        print(f"   3. Load target data using optimized query")
+        print(f"   4. Verify batch consistency")
         
-        where_clause = " AND ".join(where_conditions)
-        
-        print(f"\n📝 Final WHERE clause:")
-        print(f"   {where_clause}")
-        print(f"\n💡 What this means:")
-        print(f"   - We're loading ONLY the partitions that exist in the source data")
-        print(f"   - Target may contain data from MULTIPLE batches (whatever is current)")
-        print(f"   - This validates current state vs. source batch")
-        print("-"*70)
-        
-        # Execute query
-        target_df = spark.sql(f"""
-            SELECT * FROM {TARGET_TABLE}
-            WHERE {where_clause}
-        """)
+        # Use framework method - it handles all the logic!
+        target_df = loader._load_target_delta(table_config, BATCH_LOAD_ID, source_df=source_df)
     
-    elif ingestion_config.write_mode.lower() in ["append", "merge"]:
+    elif table_config.write_mode.lower() in ["append", "merge"]:
         # APPEND/MERGE: Multiple batches coexist, filter by batch_id
         print("\n" + "-"*70)
-        print(f"{ingestion_config.write_mode.upper()} MODE DETECTED")
+        print(f"{table_config.write_mode.upper()} MODE DETECTED")
         print("-"*70)
-        print(f"📋 Target Loading Strategy: Filter by batch_id")
+        print(f"📋 Framework strategy: Filter by batch_id only")
         print(f"   Filter: _aud_batch_load_id = '{BATCH_LOAD_ID}'")
-        print(f"   Reason: In {ingestion_config.write_mode} mode, batches coexist with unique batch_ids")
+        print(f"   Reason: In {table_config.write_mode} mode, batches coexist with unique batch_ids")
         print(f"   Framework logic: Use WHERE clause for predicate pushdown")
         print("-"*70)
         
-        # Use SQL WHERE clause for predicate pushdown and data skipping
-        target_df = spark.sql(f"""
-            SELECT * FROM {TARGET_TABLE}
-            WHERE _aud_batch_load_id = '{BATCH_LOAD_ID}'
-        """)
+        # Use framework method
+        target_df = loader._load_target_delta(table_config, BATCH_LOAD_ID, source_df=source_df)
     
     else:
-        raise ValueError(f"Unsupported write_mode: {ingestion_config.write_mode}")
+        raise ValueError(f"Unsupported write_mode: {table_config.write_mode}")
     
     target_df.cache()
     tgt_count = target_df.count()
@@ -553,27 +542,26 @@ try:
     print(f"✓ Rows: {tgt_count:,}")
     print(f"✓ Columns: {len(target_df.columns)}")
     
-    # For partition_overwrite, show which batch_ids are actually in the filtered data
-    if ingestion_config.write_mode.lower() == "partition_overwrite" and tgt_count > 0:
+    # Verbose debug output for partition_overwrite
+    if table_config.write_mode.lower() == "partition_overwrite" and tgt_count > 0:
         actual_batches = [row['_aud_batch_load_id'] for row in 
                         target_df.select("_aud_batch_load_id").distinct().limit(10).collect()]
-        print(f"\n📋 Batch IDs found in filtered target data:")
+        print(f"\n📋 DEBUG: Batch IDs found in filtered target data:")
         for batch in actual_batches:
             if batch == BATCH_LOAD_ID:
                 print(f"   • {batch} ← (this is the batch we're validating)")
             else:
-                print(f"   • {batch}")
-        if len(actual_batches) > 1:
-            print(f"\n💡 Note: Multiple batch_ids present because:")
-            print(f"   - partition_overwrite mode only overwrites SPECIFIC partitions")
-            print(f"   - Other partitions may contain data from different batches")
-            print(f"   - This is EXPECTED behavior")
+                print(f"   • {batch} ← (UNEXPECTED! Framework should filter to batch_id '{BATCH_LOAD_ID}')")
+        
+        if BATCH_LOAD_ID not in actual_batches:
+            print(f"\n⚠️  WARNING: Batch '{BATCH_LOAD_ID}' not found in target data!")
+            print(f"   Framework filtering may have an issue or data was overwritten")
     
     # Safety check: warn if no data found
     if tgt_count == 0:
         print(f"\n⚠️  WARNING: No data found in target table!")
         print(f"   Batch: {BATCH_LOAD_ID}")
-        if ingestion_config.write_mode.lower() == "partition_overwrite":
+        if table_config.write_mode.lower() == "partition_overwrite":
             print(f"   Possible causes:")
             print(f"   1) Partitions were overwritten by a later batch")
             print(f"   2) Partition values in source don't match target")
@@ -601,7 +589,7 @@ print("\n" + "="*70)
 print("DATA LOADING SUMMARY")
 print("="*70)
 print(f"\n📊 SOURCE DATA:")
-print(f"   Format: {ingestion_config.source_file_format}")
+print(f"   Format: {table_config.source_file_format}")
 print(f"   Files read: {len(source_file_paths)}")
 print(f"   Total rows: {src_count:,}")
 print(f"   Total columns: {len(source_df.columns)}")
@@ -610,13 +598,13 @@ if partition_columns:
 
 print(f"\n📊 TARGET DATA:")
 print(f"   Table: {TARGET_TABLE}")
-print(f"   Write mode: {ingestion_config.write_mode}")
+print(f"   Write mode: {table_config.write_mode}")
 
-if ingestion_config.write_mode.lower() == "overwrite":
+if table_config.write_mode.lower() == "overwrite":
     print(f"   Filter applied: None (entire table loaded)")
     print(f"   Reason: Overwrite mode - entire table = current batch")
 
-elif ingestion_config.write_mode.lower() == "partition_overwrite":
+elif table_config.write_mode.lower() == "partition_overwrite":
     print(f"   Filter applied: Partition values from source")
     if partition_columns:
         for part_col in partition_columns:
@@ -629,9 +617,9 @@ elif ingestion_config.write_mode.lower() == "partition_overwrite":
     print(f"   Reason: partition_overwrite mode - filter by current partition state")
     print(f"   Note: Target may contain data from multiple batches")
 
-elif ingestion_config.write_mode.lower() in ["append", "merge"]:
+elif table_config.write_mode.lower() in ["append", "merge"]:
     print(f"   Filter applied: _aud_batch_load_id = '{BATCH_LOAD_ID}'")
-    print(f"   Reason: {ingestion_config.write_mode} mode - multiple batches coexist")
+    print(f"   Reason: {table_config.write_mode} mode - multiple batches coexist")
 
 print(f"   Total rows: {tgt_count:,}")
 print(f"   Total columns: {len(target_df.columns)}")
@@ -717,68 +705,76 @@ print("="*70)
 # COMMAND ----------
 
 print("\n" + "="*70)
-print("STEP 4.2: SCHEMA VALIDATION")
+print("STEP 4.2: SCHEMA VALIDATION (using FRAMEWORK)")
 print("="*70)
+print(f"Framework class: SchemaValidator (with DESCRIBE EXTENDED support)")
+print(f"This will fetch original schema from target table, bypassing masked columns!")
 
-# Build schema dictionaries
-# Exclude partition columns from source (they were extracted from path)
-# Exclude audit columns (_aud_*) from target
-partition_cols_set = set(partition_columns)
+# Initialize framework's SchemaValidator
+schema_validator = SchemaValidator()
 
-source_schema = {}
-for field in source_df.schema.fields:
-    if field.name not in partition_cols_set:
-        source_schema[field.name] = field.dataType.simpleString()
+print(f"\n🔧 Framework will:")
+print(f"   1. Get source schema from DataFrame")
+print(f"   2. Execute DESCRIBE EXTENDED on target table to get original schema")
+print(f"   3. Compare schemas (excluding audit/partition columns)")
+print(f"   4. Report missing, extra, and mismatched columns")
 
-target_schema = {}
-for field in target_df.schema.fields:
-    if not field.name.startswith('_aud_') and field.name not in partition_cols_set:
-        target_schema[field.name] = field.dataType.simpleString()
+# Run framework validation
+try:
+    result = schema_validator.validate(
+        source_df=source_df,
+        target_df=target_df,
+        config=table_config
+    )
+    
+    print(f"\n✅ Schema validation completed!")
+    print(f"   Status: {result.status}")
+    print(f"   Message: {result.message}")
+    
+    # Verbose debug output
+    if result.details:
+        print(f"\n📊 DETAILED RESULTS:")
+        
+        if 'source_columns' in result.details:
+            print(f"   Source columns: {result.details['source_columns']} (excluding partition columns)")
+        if 'target_columns' in result.details:
+            print(f"   Target columns: {result.details['target_columns']} (excluding audit/partition columns)")
+        if 'missing_in_target' in result.details:
+            missing = result.details['missing_in_target']
+            print(f"   Missing in target: {len(missing)}")
+            if missing:
+                print(f"\n   MISSING IN TARGET:")
+                for col in missing:
+                    print(f"      - {col}")
+        
+        if 'extra_in_target' in result.details:
+            extra = result.details['extra_in_target']
+            print(f"   Extra in target: {len(extra)}")
+            if extra:
+                print(f"\n   EXTRA IN TARGET:")
+                for col in extra:
+                    print(f"      - {col}")
+        
+        if 'type_mismatches' in result.details:
+            mismatches = result.details['type_mismatches']
+            print(f"   Type mismatches: {len(mismatches)}")
+            if mismatches:
+                print(f"\n   TYPE MISMATCHES:")
+                for col, types in mismatches.items():
+                    print(f"      - {col}:")
+                    print(f"          Source: {types['source']}")
+                    print(f"          Target: {types['target']}")
+    
+    has_issues = result.status == "FAILED"
+    print(f"\nStatus: {result.status}")
+    
+except Exception as e:
+    print(f"\n❌ ERROR during schema validation: {str(e)}")
+    print(f"   This may indicate a framework issue or configuration problem")
+    has_issues = True
+    import traceback
+    traceback.print_exc()
 
-# Compare
-source_cols = set(source_schema.keys())
-target_cols = set(target_schema.keys())
-common_cols = source_cols & target_cols
-missing_in_target = source_cols - target_cols
-extra_in_target = target_cols - source_cols
-
-# Type mismatches
-type_mismatches = []
-for col_name in sorted(common_cols):
-    if source_schema[col_name] != target_schema[col_name]:
-        type_mismatches.append({
-            'column': col_name,
-            'source_type': source_schema[col_name],
-            'target_type': target_schema[col_name]
-        })
-
-print(f"Source columns: {len(source_schema)} (excluding partition columns)")
-print(f"Target columns: {len(target_schema)} (excluding audit/partition columns)")
-print(f"Common columns: {len(common_cols)}")
-print(f"Missing in target: {len(missing_in_target)}")
-print(f"Extra in target: {len(extra_in_target)}")
-print(f"Type mismatches: {len(type_mismatches)}")
-
-has_issues = bool(missing_in_target or extra_in_target or type_mismatches)
-
-if missing_in_target:
-    print(f"\nMISSING IN TARGET ({len(missing_in_target)} columns):")
-    for col_name in sorted(missing_in_target):
-        print(f"  - {col_name} ({source_schema[col_name]})")
-
-if extra_in_target:
-    print(f"\nEXTRA IN TARGET ({len(extra_in_target)} columns):")
-    for col_name in sorted(extra_in_target):
-        print(f"  - {col_name} ({target_schema[col_name]})")
-
-if type_mismatches:
-    print(f"\nTYPE MISMATCHES ({len(type_mismatches)} columns):")
-    for mismatch in type_mismatches:
-        print(f"  - {mismatch['column']}:")
-        print(f"      Source: {mismatch['source_type']}")
-        print(f"      Target: {mismatch['target_type']}")
-
-print(f"\nStatus: {'FAILED' if has_issues else 'PASSED'}")
 print("="*70)
 
 # COMMAND ----------
@@ -963,10 +959,10 @@ row_count_status = "PASSED" if src_count == tgt_count else "FAILED"
 
 # Schema
 checks_run.append("Schema")
-schema_passed = not (missing_in_target or extra_in_target or type_mismatches)
+schema_passed = result.status == "PASSED" if 'result' in locals() else False
 if schema_passed:
     checks_passed.append("Schema")
-schema_status = "PASSED" if schema_passed else "FAILED"
+schema_status = result.status if 'result' in locals() else "FAILED"
 
 # PK duplicates
 pk_status = "SKIPPED"

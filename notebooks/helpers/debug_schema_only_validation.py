@@ -40,10 +40,13 @@ import json
 
 # Import framework modules
 from deltarecon.core.source_target_loader import SourceTargetLoader
+from deltarecon.core.ingestion_reader import IngestionConfigReader
 from deltarecon.models.table_config import TableConfig
 from deltarecon.validators.schema_validator import SchemaValidator
 
 print("✓ Setup complete - Framework modules imported")
+print("  • IngestionConfigReader (with partition mapping prioritization)")
+print("  • SchemaValidator (with DESCRIBE EXTENDED support)")
 
 # COMMAND ----------
 
@@ -92,77 +95,66 @@ print("="*70)
 
 # COMMAND ----------
 
-print("⏳ Fetching configuration from metadata tables...")
+print("📋 Fetching configuration using FRAMEWORK (IngestionConfigReader)...")
+print("   This will automatically prioritize source_table_partition_mapping over config!")
 
-# Query serving_ingestion_config table
-ingestion_query = f"""
-    SELECT 
-        target_catalog,
-        target_schema,
-        target_table,
-        source_file_path,
-        source_file_format,
-        source_file_options,
-        write_mode,
-        partition_column
-    FROM {INGESTION_CONFIG_TABLE}
-    WHERE concat_ws('.', target_catalog, target_schema, target_table) = '{TARGET_TABLE}'
-"""
+# Use framework's IngestionConfigReader to get TableConfig
+# This automatically handles partition mapping prioritization
+config_reader = IngestionConfigReader(spark)
 
-ingestion_config = spark.sql(ingestion_query).collect()
-
-if not ingestion_config:
-    raise ValueError(f"Table '{TARGET_TABLE}' not found in {INGESTION_CONFIG_TABLE}")
-
-ingestion_config = ingestion_config[0]
-
-# Query validation_mapping table
+print(f"\n🔍 Step 1: Query validation_mapping for table: {TARGET_TABLE}")
+# Create a filter to get just this table
 validation_query = f"""
-    SELECT 
-        tgt_primary_keys,
-        mismatch_exclude_fields
+    SELECT *
     FROM {VALIDATION_MAPPING_TABLE}
     WHERE tgt_table = '{TARGET_TABLE}'
+    AND is_active = TRUE
 """
 
-validation_config = spark.sql(validation_query).collect()
+mapping_rows = spark.sql(validation_query).collect()
 
-if not validation_config:
-    print("⚠️  WARNING: Table not found in validation_mapping, using defaults")
-    primary_keys = []
-    exclude_fields = []
-else:
-    validation_config = validation_config[0]
-    # Parse primary keys (pipe-separated)
-    primary_keys = [pk.strip() for pk in validation_config.tgt_primary_keys.split('|')] if validation_config.tgt_primary_keys else []
-    # Parse exclude fields (comma-separated)
-    exclude_fields = [f.strip() for f in validation_config.mismatch_exclude_fields.split(',') if validation_config.mismatch_exclude_fields] if validation_config.mismatch_exclude_fields else []
+if not mapping_rows:
+    raise ValueError(f"Table '{TARGET_TABLE}' not found in {VALIDATION_MAPPING_TABLE} or is_active=FALSE")
 
-# Parse partition columns (comma-separated)
-partition_columns = [pc.strip() for pc in ingestion_config.partition_column.split(',')] if ingestion_config.partition_column else []
+print(f"   ✓ Found validation mapping for {TARGET_TABLE}")
 
-# Parse source file options (JSON string to dict)
-source_file_options = {}
-if ingestion_config.source_file_options:
-    try:
-        source_file_options = json.loads(ingestion_config.source_file_options)
-    except json.JSONDecodeError as e:
-        print(f"⚠️  WARNING: Failed to parse source_file_options: {e}. Will use empty options.")
-        source_file_options = {}
+# Use framework's _row_to_table_config method to build TableConfig
+# This includes partition mapping prioritization logic!
+print(f"\n🔍 Step 2: Build TableConfig using framework logic")
+print(f"   Framework will:")
+print(f"   • Query serving_ingestion_config for table details")
+print(f"   • Query source_table_partition_mapping for authoritative partitions")
+print(f"   • Prioritize mapping table over config (if available)")
+print(f"   • Fallback to config if mapping is empty")
 
-print("\n✓ Configuration loaded successfully")
+table_config = config_reader._row_to_table_config(mapping_rows[0])
+
+print(f"\n✅ TableConfig built successfully!")
+
 print("\n" + "="*70)
-print("TABLE CONFIGURATION")
+print("TABLE CONFIGURATION (from framework)")
 print("="*70)
-print(f"Target Table: {TARGET_TABLE}")
-print(f"Source File Path: {ingestion_config.source_file_path}")
-print(f"Write Mode: {ingestion_config.write_mode}")
-print(f"File Format: {ingestion_config.source_file_format}")
-print(f"File Options: {source_file_options}")
-print(f"Primary Keys: {primary_keys}")
-print(f"Partition Columns: {partition_columns}")
-print(f"Exclude Fields: {exclude_fields}")
+print(f"Target Table: {table_config.table_name}")
+print(f"Source Table: {table_config.source_table}")
+print(f"Source File Path: {table_config.source_file_path}")
+print(f"Write Mode: {table_config.write_mode}")
+print(f"File Format: {table_config.source_file_format}")
+print(f"File Options: {table_config.source_file_options}")
+print(f"Primary Keys: {table_config.primary_keys}")
+print(f"Partition Columns: {table_config.partition_columns}")
+if table_config.partition_datatypes:
+    print(f"Partition Datatypes: {table_config.partition_datatypes}")
+print(f"Exclude Fields: {table_config.exclude_columns}")
+print(f"Is Partitioned: {table_config.is_partitioned}")
 print("="*70)
+
+# Extract for convenience (to use in rest of notebook)
+TARGET_TABLE = table_config.table_name
+primary_keys = table_config.primary_keys or []
+partition_columns = table_config.partition_columns or []
+partition_datatypes = table_config.partition_datatypes or {}
+exclude_fields = table_config.exclude_columns or []
+source_file_options = table_config.source_file_options or {}
 
 # COMMAND ----------
 
@@ -418,71 +410,77 @@ except Exception as e:
 # COMMAND ----------
 
 print("\n" + "="*70)
-print("STEP 4: SCHEMA VALIDATION")
+print("STEP 4: SCHEMA VALIDATION (using FRAMEWORK)")
 print("="*70)
+print(f"Framework class: SchemaValidator (with DESCRIBE EXTENDED support)")
+print(f"This will fetch original schema from target table, bypassing masked columns!")
 
-# Build schema dictionaries (excluding partition columns from source, audit columns from target)
-partition_cols_set = set(partition_columns)
+# Initialize framework's SchemaValidator
+schema_validator = SchemaValidator()
 
-print(f"\n📋 Building schema comparison...")
-print(f"   Excluding from source: partition columns {partition_columns}")
-print(f"   Excluding from target: _aud_* columns and partition columns")
+print(f"\n🔧 Framework will:")
+print(f"   1. Get source schema from DataFrame")
+print(f"   2. Execute DESCRIBE EXTENDED on target table to get original schema")
+print(f"   3. Compare schemas (excluding audit/partition columns)")
+print(f"   4. Report missing, extra, and mismatched columns")
 
-source_schema = {}
-for field in source_df.schema.fields:
-    if field.name not in partition_cols_set:
-        source_schema[field.name] = field.dataType.simpleString()
+# Run framework validation
+try:
+    result = schema_validator.validate(
+        source_df=source_df,
+        target_df=target_df,
+        config=table_config
+    )
+    
+    print(f"\n✅ Schema validation completed!")
+    print(f"   Status: {result.status}")
+    print(f"   Message: {result.message}")
+    
+    # Verbose debug output
+    if result.details:
+        print(f"\n📊 DETAILED RESULTS:")
+        
+        if 'source_columns' in result.details:
+            print(f"   Source columns: {result.details['source_columns']} (excluding partition columns)")
+        if 'target_columns' in result.details:
+            print(f"   Target columns: {result.details['target_columns']} (excluding audit/partition columns)")
+        if 'missing_in_target' in result.details:
+            missing = result.details['missing_in_target']
+            print(f"   Missing in target: {len(missing)}")
+            if missing:
+                print(f"\n   ❌ MISSING IN TARGET:")
+                for col in missing:
+                    print(f"      - {col}")
+        
+        if 'extra_in_target' in result.details:
+            extra = result.details['extra_in_target']
+            print(f"   Extra in target: {len(extra)}")
+            if extra:
+                print(f"\n   ⚠️  EXTRA IN TARGET:")
+                for col in extra:
+                    print(f"      - {col}")
+        
+        if 'type_mismatches' in result.details:
+            mismatches = result.details['type_mismatches']
+            print(f"   Type mismatches: {len(mismatches)}")
+            if mismatches:
+                print(f"\n   ❌ TYPE MISMATCHES:")
+                for col, types in mismatches.items():
+                    print(f"      - {col}:")
+                    print(f"          Source: {types['source']}")
+                    print(f"          Target: {types['target']}")
+    
+    schema_status = result.status
+    has_issues = result.status == "FAILED"
+    
+except Exception as e:
+    print(f"\n❌ ERROR during schema validation: {str(e)}")
+    print(f"   This may indicate a framework issue or configuration problem")
+    schema_status = "FAILED"
+    has_issues = True
+    import traceback
+    traceback.print_exc()
 
-target_schema = {}
-for field in target_df.schema.fields:
-    if not field.name.startswith('_aud_') and field.name not in partition_cols_set:
-        target_schema[field.name] = field.dataType.simpleString()
-
-# Compare
-source_cols = set(source_schema.keys())
-target_cols = set(target_schema.keys())
-common_cols = source_cols & target_cols
-missing_in_target = source_cols - target_cols
-extra_in_target = target_cols - source_cols
-
-# Type mismatches
-type_mismatches = []
-for col_name in sorted(common_cols):
-    if source_schema[col_name] != target_schema[col_name]:
-        type_mismatches.append({
-            'column': col_name,
-            'source_type': source_schema[col_name],
-            'target_type': target_schema[col_name]
-        })
-
-print(f"\n📊 SCHEMA COMPARISON RESULTS:")
-print(f"   Source columns: {len(source_schema)}")
-print(f"   Target columns: {len(target_schema)}")
-print(f"   Common columns: {len(common_cols)}")
-print(f"   Missing in target: {len(missing_in_target)}")
-print(f"   Extra in target: {len(extra_in_target)}")
-print(f"   Type mismatches: {len(type_mismatches)}")
-
-has_issues = bool(missing_in_target or extra_in_target or type_mismatches)
-
-if missing_in_target:
-    print(f"\n❌ MISSING IN TARGET ({len(missing_in_target)} columns):")
-    for col_name in sorted(missing_in_target):
-        print(f"     - {col_name} ({source_schema[col_name]})")
-
-if extra_in_target:
-    print(f"\n⚠️  EXTRA IN TARGET ({len(extra_in_target)} columns):")
-    for col_name in sorted(extra_in_target):
-        print(f"     - {col_name} ({target_schema[col_name]})")
-
-if type_mismatches:
-    print(f"\n❌ TYPE MISMATCHES ({len(type_mismatches)} columns):")
-    for mismatch in type_mismatches:
-        print(f"     - {mismatch['column']}:")
-        print(f"         Source: {mismatch['source_type']}")
-        print(f"         Target: {mismatch['target_type']}")
-
-schema_status = "PASSED" if not has_issues else "FAILED"
 print(f"\n{'✅' if schema_status == 'PASSED' else '❌'} Schema Validation: {schema_status}")
 print("="*70)
 

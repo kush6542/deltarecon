@@ -564,18 +564,39 @@ print(f"Sample Size: {SAMPLE_SIZE} rows")
 print(f"Date: {spark.sql('SELECT current_timestamp()').collect()[0][0]}")
 print("="*70)
 
+# Extract metrics from framework validation result
+if 'result' in locals() and result:
+    missing_count = result.metrics.get('missing_in_target_count', 0)
+    extra_count = result.metrics.get('extra_in_target_count', 0)
+    type_mismatch_count = result.metrics.get('type_mismatches_count', 0)
+    source_col_count = result.metrics.get('source_column_count', 0)
+    target_col_count = result.metrics.get('target_column_count', 0)
+    common_col_count = result.metrics.get('common_columns', 0)
+    col_name_status = result.metrics.get('col_name_status', 'UNKNOWN')
+    data_type_status = result.metrics.get('data_type_status', 'UNKNOWN')
+else:
+    # Fallback if result not available
+    missing_count = 0
+    extra_count = 0
+    type_mismatch_count = 0
+    source_col_count = 0
+    target_col_count = 0
+    common_col_count = 0
+    col_name_status = 'UNKNOWN'
+    data_type_status = 'UNKNOWN'
+
 print("\n📋 VALIDATION RESULTS:")
 print(f"   Schema Validation: {schema_status}")
-print(f"     - Column name match: {'PASSED' if not (missing_in_target or extra_in_target) else 'FAILED'}")
-print(f"     - Data type match: {'PASSED' if not type_mismatches else 'FAILED'}")
+print(f"     - Column name match: {col_name_status}")
+print(f"     - Data type match: {data_type_status}")
 
 print(f"\n📊 SCHEMA METRICS:")
-print(f"   Source columns: {len(source_schema)}")
-print(f"   Target columns: {len(target_schema)}")
-print(f"   Common columns: {len(common_cols)}")
-print(f"   Missing in target: {len(missing_in_target)}")
-print(f"   Extra in target: {len(extra_in_target)}")
-print(f"   Type mismatches: {len(type_mismatches)}")
+print(f"   Source columns: {source_col_count}")
+print(f"   Target columns: {target_col_count}")
+print(f"   Common columns: {common_col_count}")
+print(f"   Missing in target: {missing_count}")
+print(f"   Extra in target: {extra_count}")
+print(f"   Type mismatches: {type_mismatch_count}")
 
 print(f"\n⚡ PERFORMANCE:")
 print(f"   This ran on {SAMPLE_SIZE} rows only (fast mode)")

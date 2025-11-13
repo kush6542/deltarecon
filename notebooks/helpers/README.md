@@ -141,3 +141,148 @@ Validation Schema: uat_catalog.validation
 Ingestion Ops Schema: ts42_demo.migration_operations
 Validation Schema: cat_ril_nayeem_03.validation_v2
 ```
+
+---
+
+## manual_validation_override.py
+
+**Purpose:** ⚠️ **OPERATIONAL TOOL** - Manually mark validation status as SUCCESS/SKIPPED to exclude batches from future validation runs.
+
+**Key Features:**
+- Manual override of validation status for specific batches
+- Comprehensive safety checks and validations
+- Full audit trail with user, timestamp, and reason
+- Dry-run mode for preview before execution
+- Verification of batch existence before override
+
+**Use Cases:**
+- ✅ Transient failures that are acceptable (approved by stakeholders)
+- ✅ Known data quality issues with business approval
+- ✅ Emergency scenarios requiring bypass of failed validations
+- ✅ Batches that need to be excluded from validation
+- ✅ Manual verification completed outside the framework
+
+**⚠️ IMPORTANT WARNINGS:**
+- **USE WITH CAUTION** - This bypasses automated validation checks
+- **APPROVAL REQUIRED** - Ensure proper approval before marking as SUCCESS
+- **MANUAL VERIFICATION** - Always verify data quality manually first
+- **AUDIT TRAIL** - All overrides are logged with reason and user
+
+**How to use:**
+
+1. Open the notebook in Databricks
+2. Fill in the required widgets:
+   - **Target Table**: Full table name (catalog.schema.table)
+   - **Batch Load ID**: Batch identifier to override
+   - **Override Status**: SUCCESS or SKIPPED
+   - **Reason**: Detailed reason for override (minimum 10 characters, include ticket numbers)
+   - **Dry Run**: true (preview) or false (execute)
+3. **Always start with Dry Run = true** to preview changes
+4. Review all information displayed
+5. If everything looks correct, set Dry Run = false and re-run
+6. Verify the override was successful
+
+**What it does:**
+
+1. **Validates inputs** - Ensures all required fields are provided
+2. **Verifies batch exists** - Checks ingestion audit table
+3. **Shows current status** - Displays existing validation records
+4. **Previews operation** - Shows exactly what will be inserted
+5. **Executes override** (if dry_run=false) - Inserts SUCCESS/SKIPPED record into validation_log
+6. **Verifies effect** - Confirms batch will be skipped in future runs
+
+**How it works:**
+
+The notebook inserts a record into the `validation_log` table with status = SUCCESS or SKIPPED. The validation framework checks this table and skips batches that have a latest validation status of SUCCESS or SKIPPED.
+
+**Example Usage:**
+
+**Example 1: Mark Failed Validation as Success**
+```
+Target Table: jio_home_prod.gold.customer_orders
+Batch Load ID: 20241113_092145_abc123
+Override Status: SUCCESS
+Reason: Data reconciliation failed due to timezone mismatch. Manually verified data is correct. Approved by Data Quality team (Ticket: DQ-1234)
+Dry Run: false
+```
+
+**Example 2: Skip Validation for Known Issue**
+```
+Target Table: jio_infra_prod.silver.network_events
+Batch Load ID: 20241113_080000_def456
+Override Status: SKIPPED
+Reason: Source system outage caused incomplete data load. Business approved skipping this batch. Will be reprocessed in next cycle. (Ticket: INC-5678)
+Dry Run: false
+```
+
+**Example 3: Preview Before Execution**
+```
+Target Table: jio_mobility_prod.bronze.location_data
+Batch Load ID: 20241113_103000_ghi789
+Override Status: SUCCESS
+Reason: Validation timeout due to large batch size. Data quality verified through alternative checks. Approved by Platform team.
+Dry Run: true  (Review, then set to false)
+```
+
+**Best Practices:**
+
+1. **Always use Dry Run first** - Review the preview before executing
+2. **Provide detailed reasons** - Include ticket numbers, approvals, and justification
+3. **Verify manually first** - Ensure data quality before marking as SUCCESS
+4. **Get proper approval** - Follow your organization's approval process
+5. **Document externally** - Create tickets/documentation for all manual overrides
+6. **Include ticket references** - Always reference incident/change tickets in reason
+
+**Output:**
+
+- Clear step-by-step progress with checkmarks (✅) and warnings (⚠️)
+- Batch information from ingestion audit
+- Current validation status (if any)
+- Preview of operation to be performed
+- Verification that override was successful
+- Confirmation that batch will be skipped in future runs
+
+**Safety Features:**
+
+- Input validation (required fields, format checks)
+- Batch existence verification
+- Display of current validation status
+- Dry-run mode for preview
+- Post-execution verification
+- Complete audit trail
+
+**Dependencies:**
+
+- Access to framework configuration (constants.py)
+- Write access to validation_log table
+- Read access to:
+  - Ingestion audit table
+  - Ingestion config table
+  - Validation log table
+  - Validation summary table
+
+**Troubleshooting:**
+
+**Batch Not Found:**
+- Verify batch_load_id is correct (check ingestion audit table)
+- Ensure target table uses full name (catalog.schema.table)
+- Check that batch completed ingestion successfully
+
+**Override Not Working:**
+- Verify the record was inserted into validation_log
+- Check that status is SUCCESS or SKIPPED
+- Ensure timestamp is recent (latest record is used)
+- Run verification query to check latest status
+
+**When NOT to use:**
+
+- ❌ For convenience without proper investigation
+- ❌ Without manual verification of data quality
+- ❌ Without proper approval and documentation
+- ❌ For recurring issues (fix the root cause instead)
+
+**Support:**
+
+For issues or questions, contact:
+- Data Platform Team
+- Databricks Support

@@ -37,9 +37,7 @@
         "    overall_status\n",
         "ORDER BY \n",
         "    validation_date DESC;"
-      ],
-      "catalog": "cat_ril_nayeem_03",
-      "schema": "dmvdb_system"
+      ]
     },
     {
       "name": "70208dc3",

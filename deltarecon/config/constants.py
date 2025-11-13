@@ -12,7 +12,7 @@ These constants define:
 # ============================================================================
 
 INGESTION_OPS_CATALOG = "ts42_demo"
-INGESTION_OPS_SCHEMA = "ts42_demo.migration_operations"
+INGESTION_OPS_SCHEMA = f"{INGESTION_OPS_CATALOG}.migration_operations"
 
 INGESTION_METADATA_TABLE = f"{INGESTION_OPS_SCHEMA}.serving_ingestion_metadata"
 INGESTION_AUDIT_TABLE = f"{INGESTION_OPS_SCHEMA}.serving_ingestion_audit"

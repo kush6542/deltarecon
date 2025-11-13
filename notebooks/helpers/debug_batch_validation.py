@@ -151,7 +151,6 @@ print(f"Table Group: {table_config.table_group}")
 print(f"Table Family: {table_config.table_family}")
 print(f"Target Table: {table_config.table_name}")
 print(f"Source Table: {table_config.source_table}")
-print(f"Source File Path: {table_config.source_file_path}")
 print(f"Write Mode: {table_config.write_mode}")
 print(f"File Format: {table_config.source_file_format}")
 print(f"File Options: {table_config.source_file_options}")
@@ -159,7 +158,8 @@ print(f"Primary Keys: {table_config.primary_keys}")
 print(f"Partition Columns: {table_config.partition_columns}")
 if table_config.partition_datatypes:
     print(f"Partition Datatypes: {table_config.partition_datatypes}")
-print(f"Exclude Fields: {table_config.exclude_columns}")
+print(f"Exclude Fields: {table_config.mismatch_exclude_fields}")
+print(f"Has Primary Keys: {table_config.has_primary_keys}")
 print(f"Is Partitioned: {table_config.is_partitioned}")
 print(f"Is Active: {table_config.is_active}")
 print("="*70)
@@ -169,7 +169,7 @@ TARGET_TABLE = table_config.table_name
 primary_keys = table_config.primary_keys or []
 partition_columns = table_config.partition_columns or []
 partition_datatypes = table_config.partition_datatypes or {}
-exclude_fields = table_config.exclude_columns or []
+exclude_fields = table_config.mismatch_exclude_fields or []
 source_file_options = table_config.source_file_options or {}
 
 # COMMAND ----------

@@ -155,7 +155,6 @@ print(f"Table Group: {table_config.table_group}")
 print(f"Table Family: {table_config.table_family}")
 print(f"Target Table: {table_config.table_name}")
 print(f"Source Table: {table_config.source_table}")
-print(f"Source File Path: {table_config.source_file_path}")
 print(f"Write Mode: {table_config.write_mode}")
 print(f"File Format: {table_config.source_file_format}")
 print(f"File Options: {table_config.source_file_options}")
@@ -163,7 +162,8 @@ print(f"Primary Keys: {table_config.primary_keys}")
 print(f"Partition Columns: {table_config.partition_columns}")
 if table_config.partition_datatypes:
     print(f"Partition Datatypes: {table_config.partition_datatypes}")
-print(f"Exclude Fields: {table_config.exclude_columns}")
+print(f"Exclude Fields: {table_config.mismatch_exclude_fields}")
+print(f"Has Primary Keys: {table_config.has_primary_keys}")
 print(f"Is Partitioned: {table_config.is_partitioned}")
 print(f"Is Active: {table_config.is_active}")
 print("="*70)
@@ -173,7 +173,7 @@ TARGET_TABLE = table_config.table_name
 primary_keys = table_config.primary_keys or []
 partition_columns = table_config.partition_columns or []
 partition_datatypes = table_config.partition_datatypes or {}
-exclude_fields = table_config.exclude_columns or []
+exclude_fields = table_config.mismatch_exclude_fields or []
 source_file_options = table_config.source_file_options or {}
 
 # COMMAND ----------
@@ -226,7 +226,7 @@ print("\n" + "="*70)
 print(f"STEP 2: SOURCE DATA LOADING (SAMPLE OF {SAMPLE_SIZE} ROWS)")
 print("="*70)
 print(f"📋 Configuration:")
-print(f"   File format: {ingestion_config.source_file_format}")
+print(f"   File format: {table_config.source_file_format}")
 print(f"   Sample size: {SAMPLE_SIZE} rows")
 if partition_columns:
     print(f"   Partition columns: {partition_columns}")
@@ -236,7 +236,7 @@ if source_file_options:
 print(f"\n⏳ Loading source data sample (first {SAMPLE_SIZE} rows only)...")
 
 try:
-    file_format = ingestion_config.source_file_format.lower()
+    file_format = table_config.source_file_format.lower()
     
     # Load based on format
     if file_format == "orc":
@@ -343,16 +343,16 @@ print(f"STEP 3: TARGET DATA LOADING (SAMPLE OF {SAMPLE_SIZE} ROWS)")
 print("="*70)
 print(f"📋 Configuration:")
 print(f"   Target table: {TARGET_TABLE}")
-print(f"   Write mode: {ingestion_config.write_mode}")
+print(f"   Write mode: {table_config.write_mode}")
 print(f"   Sample size: {SAMPLE_SIZE} rows")
 
 try:
     # Load target with appropriate filter based on write mode
-    if ingestion_config.write_mode.lower() == "overwrite":
+    if table_config.write_mode.lower() == "overwrite":
         print(f"\n⏳ Loading target sample (overwrite mode - no filter)...")
         target_df = spark.sql(f"SELECT * FROM {TARGET_TABLE} LIMIT {SAMPLE_SIZE}")
     
-    elif ingestion_config.write_mode.lower() == "partition_overwrite":
+    elif table_config.write_mode.lower() == "partition_overwrite":
         print(f"\n⏳ Loading target sample (partition_overwrite mode)...")
         
         if not partition_columns:
@@ -393,8 +393,8 @@ try:
             LIMIT {SAMPLE_SIZE}
         """)
     
-    elif ingestion_config.write_mode.lower() in ["append", "merge"]:
-        print(f"\n⏳ Loading target sample ({ingestion_config.write_mode} mode)...")
+    elif table_config.write_mode.lower() in ["append", "merge"]:
+        print(f"\n⏳ Loading target sample ({table_config.write_mode} mode)...")
         print(f"  Filter: _aud_batch_load_id = '{BATCH_LOAD_ID}'")
         
         target_df = spark.sql(f"""
@@ -404,7 +404,7 @@ try:
         """)
     
     else:
-        raise ValueError(f"Unsupported write_mode: {ingestion_config.write_mode}")
+        raise ValueError(f"Unsupported write_mode: {table_config.write_mode}")
     
     # Force execution to get actual count
     tgt_count = target_df.count()

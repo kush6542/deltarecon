@@ -215,8 +215,8 @@ check_summary_query = f"""
         row_count_match_status,
         schema_match_status,
         data_reconciliation_status,
-        src_records,
-        tgt_records,
+        metrics.src_records,
+        metrics.tgt_records,
         iteration_name
     FROM {constants.VALIDATION_SUMMARY_TABLE}
     WHERE batch_load_id = '{batch_load_id}'

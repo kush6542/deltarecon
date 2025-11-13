@@ -24,7 +24,7 @@
         "            THEN 'PASSED'\n",
         "            ELSE 'FAILED'\n",
         "        END AS overall_status\n",
-        "    FROM cat_ril_nayeem_03.validation_v2.validation_summary\n",
+        "    FROM <<validation_catalog_name>>.<<validation_schema_name>>.validation_summary\n",
         ")\n",
         "SELECT \n",
         "    validation_date,\n",
@@ -63,7 +63,7 @@
         "            THEN 'PASSED'\n",
         "            ELSE 'FAILED'\n",
         "        END AS status\n",
-        "    FROM cat_ril_nayeem_03.validation_v2.validation_summary\n",
+        "    FROM <<validation_catalog_name>>.<<validation_schema_name>>.validation_summary\n",
         ")\n",
         "SELECT \n",
         "    validation_date AS run_date,\n",
@@ -117,7 +117,7 @@
         "    table_family,\n",
         "    src_table as source_table\n",
         "\n",
-        "FROM cat_ril_nayeem_03.validation_v2.validation_summary order by validation_date desc;\n"
+        "FROM <<validation_catalog_name>>.<<validation_schema_name>>.validation_summary order by validation_date desc;\n"
       ]
     },
     {
@@ -143,7 +143,7 @@
         "    THEN 'PASSED'\n",
         "    ELSE 'FAILED'\n",
         "  END AS status\n",
-        "    FROM cat_ril_nayeem_03.validation_v2.validation_summary\n",
+        "    FROM <<validation_catalog_name>>.<<validation_schema_name>>.validation_summary\n",
         "),\n",
         "date_scaffold AS (\n",
         "    SELECT CURRENT_DATE AS validation_date\n",

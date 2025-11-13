@@ -5,7 +5,14 @@ Loads:
 - Source data from multiple formats (ORC, CSV, Text) with partition extraction
 - Target data from Delta tables with batch filtering
 
-CRITICAL: Includes verification that partition extraction doesn't lose/add rows.
+Target Filtering Strategy:
+- overwrite mode: Load entire table (no filtering)
+- partition_overwrite mode: Filter by partition values AND batch_id
+- append/merge mode: Filter by batch_id only
+
+CRITICAL: 
+- Includes verification that partition extraction doesn't lose/add rows
+- For partition_overwrite, filters by batch_id to exclude historical/stale data
 
 Note: Loaded via %run - TableConfig, exceptions, logger available in namespace
 """
@@ -431,8 +438,12 @@ class SourceTargetLoader:
         
         Logic:
         - overwrite mode: Load ALL data (no batch filter) - entire table IS the batch
-        - partition_overwrite: Filter by PARTITION VALUES from source (not batch_id)
+        - partition_overwrite: Filter by PARTITION VALUES + batch_id to exclude historical/stale data
         - append/merge: Filter by batch_id - batches coexist
+        
+        CRITICAL: For partition_overwrite mode, we filter by both partition values AND batch_id.
+        This prevents historical data (e.g., old hexadecimal batch_ids from historical loads)
+        from contaminating the validation comparison.
         
         Uses SQL WHERE clause for predicate pushdown and Delta data skipping.
         
@@ -495,10 +506,9 @@ class SourceTargetLoader:
             
             elif config.write_mode == "partition_overwrite":
                 # PARTITION_OVERWRITE mode: Specific partitions are replaced
-                # The batch_id changes when partition is overwritten
-                # Solution: Filter by partition VALUES (not batch_id)
+                # Filter by partition VALUES + batch_id to exclude historical/stale data
                 
-                self.logger.info(f"  PARTITION_OVERWRITE mode: Filtering by partition values from source")
+                self.logger.info(f"  PARTITION_OVERWRITE mode: Filtering by partition values + batch_id")
                 self.logger.info(f"  Partition columns: {config.partition_columns}")
                 
                 # Extract partition values from source
@@ -509,20 +519,47 @@ class SourceTargetLoader:
                     sample_values = values[:5] if len(values) > 5 else values
                     self.logger.info(f"    {part_col}: {len(values)} distinct value(s) - {sample_values}")
                 
-                # Build WHERE clause
+                # Build WHERE clause for partition filtering
                 where_clause = self._build_partition_filter_clause(partition_values, config)
-                self.logger.info(f"  Filter clause: {where_clause}")
+                self.logger.info(f"  Partition filter: {where_clause}")
                 
-                # Execute query with partition filter
+                # DIAGNOSTIC: Check which batch_ids exist in these partitions before filtering
+                try:
+                    unfiltered_batches = self.spark.sql(f"""
+                        SELECT DISTINCT _aud_batch_load_id 
+                        FROM {config.table_name}
+                        WHERE {where_clause}
+                    """).limit(10).collect()
+                    
+                    batches_in_partition = [row['_aud_batch_load_id'] for row in unfiltered_batches]
+                    
+                    if batches_in_partition:
+                        self.logger.info(f"  Batch_ids present in target partition(s): {batches_in_partition}")
+                        
+                        # Warn if historical (hexadecimal) batch IDs are present
+                        hex_batches = [b for b in batches_in_partition if not b.isdigit()]
+                        if hex_batches:
+                            self.logger.warning(
+                                f"  Found historical load batch_ids (hexadecimal format) in target: {hex_batches}. "
+                                f"These will be excluded from validation by filtering to batch_id = '{batch_id}'."
+                            )
+                except Exception as e:
+                    self.logger.debug(f"Could not check batch_ids in partition (non-critical): {str(e)}")
+                
+                # CRITICAL: Filter by batch_id to exclude historical/stale data
+                # This ensures we only validate data written by THIS specific batch
+                self.logger.info(f"  Adding batch_id filter: _aud_batch_load_id = '{batch_id}'")
+                
+                # Execute query with partition AND batch_id filter
                 df_filtered = self.spark.sql(f"""
                     SELECT * FROM {config.table_name}
                     WHERE {where_clause}
+                    AND _aud_batch_load_id = '{batch_id}'
                 """)
                 
                 self.logger.info(
-                    f"  Note: For partition_overwrite mode, we validate the CURRENT data "
-                    f"in these partitions, regardless of which batch wrote them. "
-                    f"This ensures validation works even if partitions were overwritten by later batches."
+                    f"  Note: Filtering by batch_id ensures we only compare data written by batch '{batch_id}', "
+                    f"excluding any historical or stale data that may exist in the same partitions."
                 )
             
             elif config.write_mode in ["append", "merge"]:
@@ -598,36 +635,46 @@ class SourceTargetLoader:
             self.logger.info(f"  Overwrite mode: Skipping batch consistency check (entire table = batch)")
             return
         
-        # Skip batch_id verification for partition_overwrite mode
+        # For partition_overwrite mode: verify batch_id matches (after filtering)
         if config.write_mode == "partition_overwrite":
             self.logger.info(
-                f"  Partition_overwrite mode: Skipping batch_id consistency check. "
-                f"Target is filtered by partition values, so it may contain rows from multiple batches "
-                f"(if partitions were overwritten). This is expected behavior."
+                f"  Partition_overwrite mode: Verifying batch_id consistency after filtering"
             )
             
-            # Just verify we have data
+            # Verify we have data
             try:
                 target_count = target_df.count()
                 if target_count == 0:
                     error_msg = (
-                        f"Target has no data for the source partition values in {config.table_name}! "
-                        f"Ingestion may have failed or partition values don't match."
+                        f"Target has no data for batch '{expected_batch}' in the source partition values! "
+                        f"Possible causes: "
+                        f"1) Partition was overwritten by a later batch (use Option A to skip), "
+                        f"2) Ingestion failed, "
+                        f"3) Partition values mismatch between source and target."
                     )
                     self.logger.error(error_msg)
                     raise DataConsistencyError(error_msg)
                 
-                # Log which batch_ids are actually present (informational)
+                # Verify target only contains expected batch (should always be true after filtering)
                 actual_batches = [row['_aud_batch_load_id'] for row in 
                                 target_df.select("_aud_batch_load_id").distinct().limit(10).collect()]
-                self.logger.info(f"  Target contains data from batch_id(s): {actual_batches}")
                 
-                if expected_batch not in actual_batches:
-                    self.logger.info(
-                        f"  Note: Source batch '{expected_batch}' not found in target batch_ids. "
-                        f"This means the partition was overwritten by a later batch: {actual_batches}. "
-                        f"This is normal for partition_overwrite mode."
+                if len(actual_batches) > 1:
+                    # This should not happen after batch_id filtering
+                    self.logger.warning(
+                        f"Target contains multiple batch_ids after filtering: {actual_batches}. "
+                        f"Expected only '{expected_batch}'. This may indicate a framework bug."
                     )
+                elif len(actual_batches) == 1 and actual_batches[0] == expected_batch:
+                    self.logger.info(f"  Target batch verification passed: {expected_batch}")
+                elif len(actual_batches) == 1 and actual_batches[0] != expected_batch:
+                    # Should not happen - filter should have excluded this
+                    self.logger.warning(
+                        f"Target batch mismatch after filtering! "
+                        f"Expected: {expected_batch}, Got: {actual_batches[0]}. "
+                        f"This may indicate a framework bug."
+                    )
+                    
             except DataConsistencyError:
                 raise
             except Exception as e:

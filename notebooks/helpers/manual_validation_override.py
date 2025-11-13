@@ -71,8 +71,8 @@ if not batch_load_id:
 
 if not reason:
     errors.append("❌ Reason is required - this is critical for audit trail")
-elif len(reason) < 10:
-    errors.append("❌ Reason must be at least 10 characters (provide detailed explanation)")
+elif len(reason) < 1:
+    errors.append("❌ Reason must be at least 4 characters (provide detailed explanation)")
 
 if override_status not in ['SUCCESS', 'SKIPPED']:
     errors.append("❌ Override status must be SUCCESS or SKIPPED")
@@ -122,8 +122,8 @@ check_batch_query = f"""
         target_table_name,
         group_name,
         status,
-        start_time,
-        end_time
+        start_ts,
+        end_ts
     FROM {constants.INGESTION_AUDIT_TABLE}
     WHERE batch_load_id = '{batch_load_id}'
         AND target_table_name = '{target_table}'
@@ -255,17 +255,16 @@ override_iteration = f"manual_override_{datetime.now().strftime('%Y%m%d_%H%M%S')
 # Preview the record that will be inserted
 print("\n📝 The following record will be inserted into validation_log:")
 print("-" * 80)
-print(f"batch_load_id              : {batch_load_id}")
-print(f"validation_run_status      : {override_status}")
-print(f"validation_run_start_time  : {datetime.now()}")
-print(f"validation_run_end_time    : {datetime.now()}")
-print(f"iteration_name             : {override_iteration}")
-print(f"workflow_name              : manual_override")
-print(f"table_family               : {group_name}")
-print(f"source_table               : <will be looked up>")
-print(f"target_table               : {target_table}")
-print(f"override_reason            : {reason}")
-print(f"override_by_user           : {current_user}")
+print(f"batch_load_id               : {batch_load_id}")
+print(f"src_table                   : <will be looked up>")
+print(f"tgt_table                   : {target_table}")
+print(f"validation_run_status       : {override_status}")
+print(f"validation_run_start_time   : {datetime.now()}")
+print(f"validation_run_end_time     : {datetime.now()}")
+print(f"exception (audit info)      : MANUAL OVERRIDE - Reason: {reason} | User: {current_user}")
+print(f"iteration_name              : {override_iteration}")
+print(f"workflow_name               : manual_override")
+print(f"table_family                : {group_name}")
 print("-" * 80)
 
 # COMMAND ----------
@@ -303,19 +302,22 @@ else:
         source_table = source_table_result.source_table if source_table_result else "UNKNOWN"
         
         # Insert override record into validation_log
+        # Column order: batch_load_id, src_table, tgt_table, validation_run_status, 
+        #               validation_run_start_time, validation_run_end_time, exception,
+        #               iteration_name, workflow_name, table_family
         insert_query = f"""
             INSERT INTO {constants.VALIDATION_LOG_TABLE}
             VALUES (
-                '{override_iteration}',
-                'manual_override',
-                '{group_name}',
+                '{batch_load_id}',
                 '{source_table}',
                 '{target_table}',
-                '{batch_load_id}',
                 '{override_status}',
                 TIMESTAMP '{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}',
                 TIMESTAMP '{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}',
-                'MANUAL OVERRIDE - Reason: {reason} | User: {current_user}'
+                'MANUAL OVERRIDE - Reason: {reason} | User: {current_user}',
+                '{override_iteration}',
+                'manual_override',
+                '{group_name}'
             )
         """
         

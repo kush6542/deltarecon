@@ -104,9 +104,12 @@ print("   This will automatically prioritize source_table_partition_mapping over
 config_reader = IngestionConfigReader(spark, table_group="debug_notebook")
 
 print(f"\n🔍 Step 1: Query validation_mapping + ingestion_config for table: {TARGET_TABLE}")
-# Must join validation_mapping with ingestion_config to get all required fields
+# Must join validation_mapping with ingestion_config to get ALL required fields
+# This mirrors exactly what the framework does in get_tables_in_group()
 validation_query = f"""
     SELECT 
+        vm.table_group,
+        vm.table_family,
         vm.src_table,
         vm.tgt_table,
         vm.tgt_primary_keys,
@@ -130,6 +133,7 @@ if not mapping_rows:
 
 print(f"   ✓ Found configuration for {TARGET_TABLE}")
 print(f"   ✓ Joined validation_mapping + ingestion_config")
+print(f"   ✓ Query includes all fields required by _row_to_table_config()")
 
 # Use framework's _row_to_table_config method to build TableConfig
 # This includes partition mapping prioritization logic!
@@ -147,6 +151,8 @@ print(f"\n✅ TableConfig built successfully!")
 print("\n" + "="*70)
 print("TABLE CONFIGURATION (from framework)")
 print("="*70)
+print(f"Table Group: {table_config.table_group}")
+print(f"Table Family: {table_config.table_family}")
 print(f"Target Table: {table_config.table_name}")
 print(f"Source Table: {table_config.source_table}")
 print(f"Source File Path: {table_config.source_file_path}")
@@ -159,6 +165,7 @@ if table_config.partition_datatypes:
     print(f"Partition Datatypes: {table_config.partition_datatypes}")
 print(f"Exclude Fields: {table_config.exclude_columns}")
 print(f"Is Partitioned: {table_config.is_partitioned}")
+print(f"Is Active: {table_config.is_active}")
 print("="*70)
 
 # Extract for convenience (to use in rest of notebook)

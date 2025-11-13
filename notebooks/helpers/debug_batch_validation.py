@@ -97,23 +97,36 @@ print("   This will automatically prioritize source_table_partition_mapping over
 
 # Use framework's IngestionConfigReader to get TableConfig
 # This automatically handles partition mapping prioritization
-config_reader = IngestionConfigReader(spark)
+# Note: table_group is required by constructor but not used by _row_to_table_config()
+config_reader = IngestionConfigReader(spark, table_group="debug_notebook")
 
-print(f"\n🔍 Step 1: Query validation_mapping for table: {TARGET_TABLE}")
-# Create a filter to get just this table
+print(f"\n🔍 Step 1: Query validation_mapping + ingestion_config for table: {TARGET_TABLE}")
+# Must join validation_mapping with ingestion_config to get all required fields
 validation_query = f"""
-    SELECT *
-    FROM {VALIDATION_MAPPING_TABLE}
-    WHERE tgt_table = '{TARGET_TABLE}'
-    AND is_active = TRUE
+    SELECT 
+        vm.src_table,
+        vm.tgt_table,
+        vm.tgt_primary_keys,
+        vm.mismatch_exclude_fields,
+        vm.validation_is_active,
+        ic.write_mode,
+        ic.partition_column,
+        ic.source_file_format,
+        ic.source_file_options
+    FROM {VALIDATION_MAPPING_TABLE} vm
+    INNER JOIN {INGESTION_CONFIG_TABLE} ic
+        ON vm.tgt_table = concat_ws('.', ic.target_catalog, ic.target_schema, ic.target_table)
+    WHERE vm.tgt_table = '{TARGET_TABLE}'
+        AND vm.validation_is_active = TRUE
 """
 
 mapping_rows = spark.sql(validation_query).collect()
 
 if not mapping_rows:
-    raise ValueError(f"Table '{TARGET_TABLE}' not found in {VALIDATION_MAPPING_TABLE} or is_active=FALSE")
+    raise ValueError(f"Table '{TARGET_TABLE}' not found or inactive in {VALIDATION_MAPPING_TABLE}")
 
-print(f"   ✓ Found validation mapping for {TARGET_TABLE}")
+print(f"   ✓ Found configuration for {TARGET_TABLE}")
+print(f"   ✓ Joined validation_mapping + ingestion_config")
 
 # Use framework's _row_to_table_config method to build TableConfig
 # This includes partition mapping prioritization logic!
@@ -450,6 +463,9 @@ print(f"   ✓ Historical data exclusion")
 try:
     # Initialize framework's SourceTargetLoader
     loader = SourceTargetLoader(spark)
+    
+    # Initialize partition_values (used for debug output later)
+    partition_values = {}
     
     print(f"\n📊 Framework will determine filtering strategy based on write_mode...")
     

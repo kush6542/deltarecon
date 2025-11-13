@@ -485,10 +485,10 @@ try:
             print(f"   Type mismatches: {len(mismatches)}")
             if mismatches:
                 print(f"\n   ❌ TYPE MISMATCHES:")
-                for col, types in mismatches.items():
-                    print(f"      - {col}:")
-                    print(f"          Source: {types['source']}")
-                    print(f"          Target: {types['target']}")
+                for mismatch in mismatches:
+                    print(f"      - {mismatch['column']}:")
+                    print(f"          Source: {mismatch['source_type']}")
+                    print(f"          Target: {mismatch['target_type']}")
     
     schema_status = result.status
     has_issues = result.status == "FAILED"
@@ -510,6 +510,9 @@ print("="*70)
 # MAGIC ## Detailed Schema Listing
 
 # COMMAND ----------
+
+# Define partition columns set for filtering
+partition_cols_set = set(partition_columns) if partition_columns else set()
 
 print("\n" + "="*70)
 print("SOURCE SCHEMA (excluding partition columns)")

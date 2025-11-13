@@ -783,10 +783,10 @@ try:
             print(f"   Type mismatches: {len(mismatches)}")
             if mismatches:
                 print(f"\n   TYPE MISMATCHES:")
-                for col, types in mismatches.items():
-                    print(f"      - {col}:")
-                    print(f"          Source: {types['source']}")
-                    print(f"          Target: {types['target']}")
+                for mismatch in mismatches:
+                    print(f"      - {mismatch['column']}:")
+                    print(f"          Source: {mismatch['source_type']}")
+                    print(f"          Target: {mismatch['target_type']}")
     
     has_issues = result.status == "FAILED"
     print(f"\nStatus: {result.status}")

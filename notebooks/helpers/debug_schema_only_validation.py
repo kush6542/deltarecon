@@ -538,14 +538,14 @@ for field in target_df.schema.fields:
 print("\n" + "="*70)
 print(f"SOURCE DATA PREVIEW (first 5 of {src_count} sampled rows)")
 # print("="*70)
-display(source_df.limit(5))
+# display(source_df.limit(5))
 
 # COMMAND ----------
 
 print("\n" + "="*70)
 print(f"TARGET DATA PREVIEW (first 5 of {tgt_count} sampled rows)")
 # print("="*70)
-display(target_df.limit(5))
+# display(target_df.limit(5))
 
 # COMMAND ----------
 

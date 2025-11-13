@@ -93,14 +93,10 @@ class ValidationEngine:
         source_df.cache()
         target_df.cache()
         
-        # Now count and log (forces materialization of cache)
-        self.logger.info(f"Source DataFrame:")
-        self.logger.info(f"  Rows: {source_df.count():,}")
-        self.logger.info(f"  Columns: {len(source_df.columns)}")
-        
-        self.logger.info(f"Target DataFrame:")
-        self.logger.info(f"  Rows: {target_df.count():,}")
-        self.logger.info(f"  Columns: {len(target_df.columns)}")
+        # Count and log in single line (forces materialization of cache)
+        src_count = source_df.count()
+        tgt_count = target_df.count()
+        self.logger.info(f"Validating: Source ({src_count:,} rows × {len(source_df.columns)} cols) vs Target ({tgt_count:,} rows × {len(target_df.columns)} cols)")
         
         # Run all validators
         validator_results = {}

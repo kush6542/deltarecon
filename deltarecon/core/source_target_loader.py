@@ -289,13 +289,6 @@ class SourceTargetLoader:
                 regexp_extract(col("_metadata.file_path"), pattern, 1)
             )
             
-            # Verify extraction worked (show sample) - optimized with take() instead of distinct().collect()
-            # take(5) is much faster as it doesn't require full scan + distinct
-            sample_rows = result_df.select(part_col).take(5)
-            sample_values = list(set([row[part_col] for row in sample_rows if row[part_col]]))[:5]
-            
-            self.logger.info(f"    Extracted '{part_col}' values (sample): {sample_values}")
-            
             # Cast to correct datatype
             target_dtype = config.partition_datatypes.get(part_col, 'string')
             if target_dtype != 'string':
@@ -303,7 +296,6 @@ class SourceTargetLoader:
                     part_col,
                     col(part_col).cast(target_dtype)
                 )
-                self.logger.info(f"    Cast '{part_col}' to {target_dtype}")
         
         return result_df
     
@@ -514,14 +506,12 @@ class SourceTargetLoader:
                 # Extract partition values from source
                 partition_values = self._extract_partition_values_from_source(source_df, config)
                 
-                # Log extracted values
-                for part_col, values in partition_values.items():
-                    sample_values = values[:5] if len(values) > 5 else values
-                    self.logger.info(f"    {part_col}: {len(values)} distinct value(s) - {sample_values}")
+                # Log summary of extracted values
+                value_counts = ', '.join([f"{col}={len(vals)}" for col, vals in partition_values.items()])
+                self.logger.info(f"  Extracted partition values: {value_counts}")
                 
                 # Build WHERE clause for partition filtering
                 where_clause = self._build_partition_filter_clause(partition_values, config)
-                self.logger.info(f"  Partition filter: {where_clause}")
                 
                 # DIAGNOSTIC: Check which batch_ids exist in these partitions before filtering
                 try:
@@ -557,10 +547,7 @@ class SourceTargetLoader:
                     AND _aud_batch_load_id = '{batch_id}'
                 """)
                 
-                self.logger.info(
-                    f"  Note: Filtering by batch_id ensures we only compare data written by batch '{batch_id}', "
-                    f"excluding any historical or stale data that may exist in the same partitions."
-                )
+                self.logger.info(f"  Filtering to batch_id '{batch_id}' to exclude historical data")
             
             elif config.write_mode in ["append", "merge"]:
                 # APPEND/MERGE: Multiple batches coexist

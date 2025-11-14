@@ -47,12 +47,26 @@ class SchemaValidator(BaseValidator):
         """
         Parse a string datatype (from DESCRIBE EXTENDED) into PySpark DataType
         
+        Handles both primitive types (string, int) and complex types (array<string>, map<string,int>, struct<...>)
+        
         Args:
-            dtype_str: String representation of datatype (e.g., 'int', 'bigint', 'string')
+            dtype_str: String representation of datatype (e.g., 'int', 'array<string>', 'map<string,int>')
         
         Returns:
             Corresponding PySpark DataType object
         """
+        dtype_str = dtype_str.strip()
+        
+        # FIRST: Try PySpark's internal parser (handles ALL types including complex)
+        try:
+            from pyspark.sql.types import _parse_datatype_string as pyspark_parse
+            parsed_type = pyspark_parse(dtype_str)
+            return parsed_type
+        except Exception as e:
+            # If PySpark parser fails, fall back to manual parsing
+            logger.debug(f"PySpark parser failed for '{dtype_str}': {e}. Using fallback parser.")
+        
+        # FALLBACK: Manual parsing for backward compatibility
         dtype_lower = dtype_str.lower().strip()
         
         # Handle decimal types with precision/scale
@@ -82,7 +96,13 @@ class SchemaValidator(BaseValidator):
             'tinyint': ByteType(),
         }
         
-        return type_mapping.get(dtype_lower, StringType())
+        result = type_mapping.get(dtype_lower)
+        if result:
+            return result
+        
+        # If still not found, log warning and default to StringType
+        logger.warning(f"Unable to parse datatype '{dtype_str}', defaulting to StringType()")
+        return StringType()
     
     def _get_original_target_schema(self, table_name: str, target_df: DataFrame) -> Dict[str, DataType]:
         """
@@ -142,7 +162,8 @@ class SchemaValidator(BaseValidator):
             logger.warning(f"Failed to get original schema via DESCRIBE EXTENDED: {e}")
             logger.warning("Falling back to DataFrame schema (may show masked types)")
             
-            # Fallback to DataFrame schema
+            # Fallback to DataFrame schema (exclude _aud_* columns)
+            # Note: Partition columns will be excluded later in validate() method
             return {
                 f.name: f.dataType 
                 for f in target_df.schema.fields 

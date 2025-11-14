@@ -647,6 +647,6 @@ Key concepts:
 
 For issues and questions:
 - Open an issue on GitHub
-- Contact: kushagra.parashar@databricks.com
+- Contact: [Your contact information]
 
 

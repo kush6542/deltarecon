@@ -375,7 +375,7 @@ try:
                 if isinstance(val, str):
                     where_conditions.append(f"{part_col} = '{val}'")
                 else:
-                    where_conditions.append(f"{part_col} = {val}")
+                    where_conditions.append(f"{part_col} = '{val}'")
             else:
                 if isinstance(values[0], str):
                     val_list = ", ".join([f"'{v}'" for v in values])

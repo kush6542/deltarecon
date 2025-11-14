@@ -15,29 +15,29 @@ prod:
   spark_conf:
       spark.driver.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
       spark.executor.extraJavaOptions: "-Duser.timezone=Asia/Kolkata"
-  email_notification_list: utkarsh3.kumar@ril.com
+  email_notification_list: your-email@example.com
   min_workers: 2
   max_workers: 5
   max_concurrent_runs: 1
   is_queue_enabled: false
   pause_schedule: true
   tags:
-    developer_name: "Utkarsh3.Kumar"
+    developer_name: "FirstName.Kumar"
     job_type: "home_incremental_migration"
 
 jobs:
   - job_name: jb_vld_conn_create_tables
-    email_notification_list: utkarsh3.kumar@ril.com
+    email_notification_list: your-email@example.com
     notebook_path: '/Workspace/Shared/serving_gold_ingestion/dbx_validation_framework/notebooks/setup/01_create_tables'
     schedule: ""
   
   - job_name: jb_vld_conn_setup_framework
-    email_notification_list: utkarsh3.kumar@ril.com
+    email_notification_list: your-email@example.com
     notebook_path: '/Workspace/Shared/serving_gold_ingestion/dbx_validation_framework/notebooks/setup/02_setup_validation_mapping'
     schedule: ""
 
   - job_name: jb_vld_conn_home_silver_text_9am_daily_job
-    email_notification_list: utkarsh3.kumar@ril.com
+    email_notification_list: your-email@example.com
     notebook_path: '/Workspace/Shared/serving_gold_ingestion/dbx_validation_framework/notebooks/main'
     schedule: ""
     job_parameters:
@@ -46,7 +46,7 @@ jobs:
       isFullValidation: "false" 
 
   - job_name: jb_vld_conn_home_silver_every_30min_job
-    email_notification_list: utkarsh3.kumar@ril.com
+    email_notification_list: your-email@example.com
     notebook_path: '/Workspace/Shared/serving_gold_ingestion/dbx_validation_framework/notebooks/main'
     schedule: ""
     job_parameters:
@@ -55,7 +55,7 @@ jobs:
       isFullValidation: "false" 
 
   - job_name: jb_vld_conn_home_silver_every_2hour30min_job
-    email_notification_list: utkarsh3.kumar@ril.com
+    email_notification_list: your-email@example.com
     notebook_path: '/Workspace/Shared/serving_gold_ingestion/dbx_validation_framework/notebooks/main'
     schedule: ""
     job_parameters:
